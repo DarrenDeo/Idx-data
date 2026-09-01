@@ -9,13 +9,15 @@ from decimal import Decimal
 from io import StringIO
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import desc, func, select, text
 from sqlalchemy.orm import Session
 
 from app.api.cache import OptionalCache
+from app.api.dashboard import DASHBOARD_HTML
+from app.api.jobs import JobAlreadyRunningError, job_manager
 from app.config import settings
 from app.database.connection import get_db
 from app.database.models import ETLRun, OHLCVDaily, Stock
@@ -84,6 +86,16 @@ class ETLRunOut(BaseModel):
     error_message: str | None
 
 
+class DailyJobRequest(BaseModel):
+    end: date | None = None
+
+
+class BackfillJobRequest(BaseModel):
+    symbols: str
+    start: date
+    end: date
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="IDX OHLCV Internal API", version="0.1.0")
     cache = OptionalCache(settings.redis_url, settings.api_cache_ttl)
@@ -96,6 +108,10 @@ def create_app() -> FastAPI:
         API_REQUESTS.labels(request.method, path, response.status_code).inc()
         API_LATENCY.labels(path).observe(time.perf_counter() - started)
         return response
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def dashboard():
+        return DASHBOARD_HTML
 
     @app.get("/health")
     def health(db: Session = Depends(get_db)):
@@ -130,20 +146,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=422, detail="from must not be after to")
         return list(db.scalars(ohlcv_query(symbol, from_date, to_date)))
 
-    @app.get("/export", response_class=HTMLResponse, include_in_schema=False)
+    @app.get("/export", include_in_schema=False)
     def export_page():
-        return """<!doctype html>
-<html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>IDX OHLCV Data Export</title>
-<style>body{font-family:system-ui,sans-serif;max-width:720px;margin:48px auto;padding:0 20px;color:#0f172a}form{display:grid;gap:16px;padding:24px;border:1px solid #cbd5e1;border-radius:12px}label{display:grid;gap:6px;font-weight:600}input{padding:10px;border:1px solid #94a3b8;border-radius:6px}.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}button{padding:12px;background:#0f766e;color:white;border:0;border-radius:6px;font-weight:700;cursor:pointer}button.csv{background:#1d4ed8}.note{color:#475569;font-size:.92rem}</style>
-</head><body><h1>Export Data OHLCV</h1><p>Unduh data tervalidasi yang sudah tersimpan di PostgreSQL.</p>
-<form method="get">
-<label>Simbol, pisahkan dengan koma<input name="symbols" value="BBCA,BBRI,TLKM" placeholder="Kosongkan untuk semua simbol"></label>
-<label>Tanggal mulai<input type="date" name="from"></label>
-<label>Tanggal akhir<input type="date" name="to"></label>
-<div class="actions"><button class="csv" type="submit" formaction="/export/ohlcv.csv">Unduh CSV (data)</button><button type="submit" formaction="/export/ohlcv.xlsx">Unduh Excel (format Rp)</button></div>
-<div class="note">Maksimum 100.000 candle per file. Baris tidak lengkap tetap berada di data_errors dan tidak diekspor.</div>
-</form></body></html>"""
+        return RedirectResponse(url="/", status_code=302)
 
     def filtered_export_rows(
         db: Session,
@@ -254,6 +259,110 @@ def create_app() -> FastAPI:
         result = [OHLCVOut.model_validate(row).model_dump(mode="json") for row in rows]
         cache.set("latest", result)
         return result
+
+    @app.get("/ui/api/overview")
+    def ui_overview(db: Session = Depends(get_db)):
+        total_rows, total_symbols, earliest_date, latest_date = db.execute(
+            select(
+                func.count(OHLCVDaily.symbol),
+                func.count(func.distinct(OHLCVDaily.symbol)),
+                func.min(OHLCVDaily.trade_date),
+                func.max(OHLCVDaily.trade_date),
+            )
+        ).one()
+        last_run = db.scalar(select(ETLRun).order_by(desc(ETLRun.started_at)).limit(1))
+        return {
+            "total_rows": total_rows,
+            "total_symbols": total_symbols,
+            "earliest_date": earliest_date,
+            "latest_date": latest_date,
+            "last_run": (
+                {
+                    "job_name": last_run.job_name,
+                    "status": last_run.status,
+                    "rows_loaded": last_run.rows_loaded,
+                    "rows_rejected": last_run.rows_rejected,
+                }
+                if last_run
+                else None
+            ),
+        }
+
+    @app.get("/ui/api/ohlcv", response_model=list[OHLCVOut])
+    def ui_ohlcv(
+        symbols: str | None = Query(None),
+        from_date: date | None = Query(None, alias="from"),
+        to_date: date | None = Query(None, alias="to"),
+        limit: int = Query(500, ge=1, le=5_000),
+        db: Session = Depends(get_db),
+    ):
+        if from_date and to_date and from_date > to_date:
+            raise HTTPException(status_code=422, detail="Tanggal mulai tidak boleh setelah akhir")
+        selected_symbols = _export_symbols(symbols)
+        statement = select(OHLCVDaily)
+        if selected_symbols:
+            statement = statement.where(OHLCVDaily.symbol.in_(selected_symbols))
+        if from_date:
+            statement = statement.where(OHLCVDaily.trade_date >= from_date)
+        if to_date:
+            statement = statement.where(OHLCVDaily.trade_date <= to_date)
+        return list(
+            db.scalars(
+                statement.order_by(OHLCVDaily.symbol, OHLCVDaily.trade_date).limit(limit)
+            )
+        )
+
+    @app.get("/ui/api/etl-runs", response_model=list[ETLRunOut])
+    def ui_etl_runs(limit: int = Query(10, ge=1, le=50), db: Session = Depends(get_db)):
+        return list(db.scalars(select(ETLRun).order_by(desc(ETLRun.started_at)).limit(limit)))
+
+    def start_ui_job(name: str, command: list[str]):
+        try:
+            return job_manager.start(name, command)
+        except JobAlreadyRunningError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Job lain masih berjalan: {exc}",
+            ) from exc
+
+    @app.get("/ui/api/jobs/current")
+    def current_ui_job():
+        return job_manager.current()
+
+    @app.post("/ui/api/jobs/sync-symbols", status_code=202)
+    def start_sync_symbols():
+        return start_ui_job("Sinkronisasi simbol", ["idx-platform", "sync-symbols"])
+
+    @app.post("/ui/api/jobs/daily", status_code=202)
+    def start_daily_update(request: DailyJobRequest):
+        end_date = request.end or date.today()
+        return start_ui_job(
+            "Pembaruan harian",
+            ["idx-platform", "daily", "--end", end_date.isoformat()],
+        )
+
+    @app.post("/ui/api/jobs/backfill", status_code=202)
+    def start_backfill(request: BackfillJobRequest):
+        if request.start > request.end:
+            raise HTTPException(status_code=422, detail="Tanggal mulai tidak boleh setelah akhir")
+        selected_symbols = _export_symbols(request.symbols)
+        if not selected_symbols:
+            raise HTTPException(status_code=422, detail="Isi minimal satu simbol")
+        if len(selected_symbols) > 20:
+            raise HTTPException(status_code=422, detail="Maksimum 20 simbol per backfill UI")
+        return start_ui_job(
+            "Backfill terpilih",
+            [
+                "idx-platform",
+                "backfill",
+                "--symbols",
+                *selected_symbols,
+                "--start",
+                request.start.isoformat(),
+                "--end",
+                request.end.isoformat(),
+            ],
+        )
 
     @app.get("/etl-runs", response_model=list[ETLRunOut])
     def etl_runs(limit: int = Query(50, ge=1, le=500), db: Session = Depends(get_db)):

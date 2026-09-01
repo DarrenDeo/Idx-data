@@ -65,9 +65,9 @@ Services:
 
 | Service | URL |
 |---|---|
-| FastAPI through Nginx | <http://localhost/> |
+| Web dashboard | <http://localhost/> |
 | Swagger | <http://localhost/docs> |
-| Excel export | <http://localhost/export> |
+| CSV / Excel export | Available from the dashboard |
 | Airflow | <http://localhost:18080> |
 | Grafana | <http://localhost:13000> |
 | Prometheus | <http://localhost:19090> |
@@ -179,6 +179,22 @@ same container.
 
 Weekends and market holidays can legitimately return no rows and are not fatal.
 
+## Web dashboard
+
+Open <http://localhost/> after the server starts. The dashboard replaces the
+most common terminal commands with buttons:
+
+- filter and display OHLCV data for one or more symbols;
+- synchronize the IDX symbol list;
+- run the safe daily market update;
+- backfill up to 20 selected symbols for a date range;
+- inspect the current process output and recent ETL status; and
+- download the currently selected symbols and dates as CSV or formatted Excel.
+
+Only one data operation can run at a time. Closing the browser does not stop an
+operation already started by the dashboard. The API container continues the job
+and the status appears again when the dashboard is reopened.
+
 ## API
 
 ```text
@@ -195,9 +211,9 @@ GET /export/ohlcv.xlsx?symbols=BBCA,BBRI,TLKM&from=2026-08-24&to=2026-08-28
 GET /docs
 ```
 
-The browser form at `/export` offers CSV (small, fast, and Excel-compatible) or
-a formatted `.xlsx` workbook with a summary sheet and validated OHLCV data
-sheet. CSV includes an explicit `currency=IDR` field while keeping prices numeric.
+The dashboard at `/` offers CSV (small, fast, and Excel-compatible) or a
+formatted `.xlsx` workbook with a summary sheet and validated OHLCV data sheet.
+CSV includes an explicit `currency=IDR` field while keeping prices numeric.
 XLSX displays price columns as Rupiah, volume with thousands separators, and
 price changes as percentages. A file is limited to 100,000 rows; split large
 exports by symbol or date range.
