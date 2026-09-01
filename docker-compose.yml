@@ -157,6 +157,18 @@ services:
       api:
         condition: service_healthy
 
+  public-nginx:
+    profiles: ["server"]
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PUBLIC_HOST_PORT:-18474}:80"
+    volumes:
+      - ./nginx/public.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      api:
+        condition: service_healthy
+
   prometheus:
     profiles: ["monitoring"]
     image: prom/prometheus:v3.2.1

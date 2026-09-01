@@ -193,7 +193,13 @@ most common terminal commands with buttons:
 
 Only one data operation can run at a time. Closing the browser does not stop an
 operation already started by the dashboard. The API container continues the job
-and the status appears again when the dashboard is reopened.
+and the status appears again when the dashboard is reopened. UI-started jobs also
+have a 30-second global cooldown to reduce accidental or repeated submissions.
+
+The `server` profile also starts `public-nginx` on host-only port `18474`. It is
+intended as the local target for an HTTPS Tailscale Funnel. Swagger, OpenAPI,
+Prometheus metrics, and Redoc are not exposed through this public gateway; the
+dashboard, data queries, exports, and guarded scraping controls remain available.
 
 ## API
 

@@ -172,8 +172,10 @@ def test_dashboard_displays_overview_and_filtered_data(session):
     page = client.get("/")
     assert page.status_code == 200
     assert "Market Data Dashboard" in page.text
-    assert "Sinkronkan simbol" in page.text
-    assert "Jalankan backfill" in page.text
+    assert "Ambil dan verifikasi saham" in page.text
+    assert "Mulai scraping historis" in page.text
+    assert "Reset tampilan" in page.text
+    assert "Reset scraping" in page.text
 
     overview = client.get("/ui/api/overview").json()
     assert overview["total_rows"] == 1
@@ -229,3 +231,10 @@ def test_dashboard_builds_only_validated_cli_jobs(session, monkeypatch):
         "--end",
         "2026-08-28",
     ]
+
+    reset_calls = []
+    monkeypatch.setattr(api_main.job_manager, "reset", lambda: reset_calls.append(True))
+    reset = client.post("/ui/api/jobs/reset")
+    assert reset.status_code == 200
+    assert reset.json() == {"status": "reset"}
+    assert reset_calls == [True]

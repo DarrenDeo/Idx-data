@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.api.cache import OptionalCache
 from app.api.dashboard import DASHBOARD_HTML
-from app.api.jobs import JobAlreadyRunningError, job_manager
+from app.api.jobs import JobAlreadyRunningError, JobCooldownError, job_manager
 from app.config import settings
 from app.database.connection import get_db
 from app.database.models import ETLRun, OHLCVDaily, Stock
@@ -324,20 +324,37 @@ def create_app() -> FastAPI:
                 status_code=409,
                 detail=f"Job lain masih berjalan: {exc}",
             ) from exc
+        except JobCooldownError as exc:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Tunggu {exc.retry_after} detik sebelum memulai proses berikutnya",
+                headers={"Retry-After": str(exc.retry_after)},
+            ) from exc
 
     @app.get("/ui/api/jobs/current")
     def current_ui_job():
         return job_manager.current()
 
+    @app.post("/ui/api/jobs/reset")
+    def reset_ui_job():
+        try:
+            job_manager.reset()
+        except JobAlreadyRunningError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Proses masih berjalan dan belum dapat direset: {exc}",
+            ) from exc
+        return {"status": "reset"}
+
     @app.post("/ui/api/jobs/sync-symbols", status_code=202)
     def start_sync_symbols():
-        return start_ui_job("Sinkronisasi simbol", ["idx-platform", "sync-symbols"])
+        return start_ui_job("Scraping daftar saham", ["idx-platform", "sync-symbols"])
 
     @app.post("/ui/api/jobs/daily", status_code=202)
     def start_daily_update(request: DailyJobRequest):
         end_date = request.end or date.today()
         return start_ui_job(
-            "Pembaruan harian",
+            "Scraping data terbaru",
             ["idx-platform", "daily", "--end", end_date.isoformat()],
         )
 
@@ -349,9 +366,12 @@ def create_app() -> FastAPI:
         if not selected_symbols:
             raise HTTPException(status_code=422, detail="Isi minimal satu simbol")
         if len(selected_symbols) > 20:
-            raise HTTPException(status_code=422, detail="Maksimum 20 simbol per backfill UI")
+            raise HTTPException(
+                status_code=422,
+                detail="Maksimum 20 kode saham per pengambilan data historis",
+            )
         return start_ui_job(
-            "Backfill terpilih",
+            "Scraping data historis",
             [
                 "idx-platform",
                 "backfill",

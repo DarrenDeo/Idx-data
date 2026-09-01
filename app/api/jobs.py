@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from threading import Lock, Thread
@@ -28,17 +29,28 @@ class JobAlreadyRunningError(RuntimeError):
     pass
 
 
+class JobCooldownError(RuntimeError):
+    def __init__(self, retry_after: int) -> None:
+        self.retry_after = retry_after
+        super().__init__(str(retry_after))
+
+
 class JobManager:
     """Run one allow-listed CLI job at a time without blocking HTTP requests."""
 
-    def __init__(self) -> None:
+    def __init__(self, cooldown_seconds: int = 30) -> None:
         self._lock = Lock()
         self._current: JobState | None = None
+        self._cooldown_seconds = cooldown_seconds
+        self._last_started = 0.0
 
     def start(self, name: str, command: list[str]) -> dict[str, object]:
         with self._lock:
             if self._current and self._current.status == "RUNNING":
                 raise JobAlreadyRunningError(self._current.name)
+            elapsed = time.monotonic() - self._last_started
+            if elapsed < self._cooldown_seconds:
+                raise JobCooldownError(max(1, round(self._cooldown_seconds - elapsed)))
             state = JobState(
                 id=uuid4().hex,
                 name=name,
@@ -47,12 +59,20 @@ class JobManager:
                 started_at=datetime.now(timezone.utc).isoformat(),
             )
             self._current = state
+            self._last_started = time.monotonic()
         Thread(target=self._execute, args=(state,), daemon=True).start()
         return state.public()
 
     def current(self) -> dict[str, object] | None:
         with self._lock:
             return self._current.public() if self._current else None
+
+    def reset(self) -> None:
+        """Clear a finished UI job without deleting any downloaded data."""
+        with self._lock:
+            if self._current and self._current.status == "RUNNING":
+                raise JobAlreadyRunningError(self._current.name)
+            self._current = None
 
     def _execute(self, state: JobState) -> None:
         try:
