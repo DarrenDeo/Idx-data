@@ -1,0 +1,40 @@
+{
+  "title": "IDX Platform Operations",
+  "uid": "idx-platform",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "API requests per second",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(rate(idx_api_requests_total[5m])) by (path, status)", "legendFormat": "{{path}} {{status}}"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "API p95 latency",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(idx_api_request_duration_seconds_bucket[5m])) by (le, path))", "legendFormat": "{{path}}"}]
+    },
+    {
+      "type": "stat",
+      "title": "Rows loaded",
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 8},
+      "targets": [{"expr": "sum(idx_etl_rows_loaded_total)", "legendFormat": "rows"}]
+    },
+    {
+      "type": "stat",
+      "title": "ETL successes",
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 8},
+      "targets": [{"expr": "sum(idx_etl_success_total)", "legendFormat": "success"}]
+    },
+    {
+      "type": "stat",
+      "title": "ETL failures",
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 8},
+      "targets": [{"expr": "sum(idx_etl_failure_total)", "legendFormat": "failure"}]
+    }
+  ]
+}
+
