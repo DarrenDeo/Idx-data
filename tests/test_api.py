@@ -176,6 +176,11 @@ def test_dashboard_displays_overview_and_filtered_data(session):
     assert "Mulai scraping historis" in page.text
     assert "Reset tampilan" in page.text
     assert "Reset scraping" in page.text
+    assert "idx-data:view-reset:v1" in page.text
+    assert "idx-data:scraping-reset:v1" in page.text
+    assert "rememberReset(viewResetKey)" in page.text
+    assert "rememberReset(scrapingResetKey)" in page.text
+    assert "if(isReset(viewResetKey))" in page.text
 
     overview = client.get("/ui/api/overview").json()
     assert overview["total_rows"] == 1
