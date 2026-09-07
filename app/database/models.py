@@ -140,6 +140,29 @@ Index(
 )
 
 
+class MarketBrokerSummaryDaily(Base):
+    """Public IDX broker totals for the whole market, per trading session."""
+
+    __tablename__ = "market_broker_summary_daily"
+
+    trade_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    broker_code: Mapped[str] = mapped_column(String(16), primary_key=True)
+    broker_name: Mapped[str | None] = mapped_column(Text)
+    volume: Mapped[int | None] = mapped_column(BigInteger)
+    value: Mapped[Decimal | None] = mapped_column(Numeric(24, 4))
+    frequency: Mapped[int | None] = mapped_column(BigInteger)
+    source: Mapped[str] = mapped_column(String(50), nullable=False, default="idx_public")
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+Index(
+    "idx_market_broker_summary_date",
+    MarketBrokerSummaryDaily.trade_date.desc(),
+)
+
+
 class CorporateAction(Base):
     __tablename__ = "corporate_actions"
     __table_args__ = (

@@ -28,6 +28,7 @@ from app.database.models import (
     BrokerSummaryDaily,
     ETLRun,
     ForeignFlowDaily,
+    MarketBrokerSummaryDaily,
     OHLCVDaily,
     Stock,
 )
@@ -41,6 +42,7 @@ from app.exporting.excel import (
     EXCEL_MIME_TYPE,
     build_analysis_workbook,
     build_broker_workbook,
+    build_market_broker_workbook,
     build_ohlcv_workbook,
 )
 from app.monitoring import API_LATENCY, API_REQUESTS
@@ -112,6 +114,11 @@ class DailyJobRequest(BaseModel):
 
 class BackfillJobRequest(BaseModel):
     symbols: str
+    start: date
+    end: date
+
+
+class DateRangeJobRequest(BaseModel):
     start: date
     end: date
 
@@ -239,6 +246,79 @@ def _broker_summary_result(
         "top_buyers": sorted(output, key=lambda item: item["buy_value"], reverse=True)[:5],
         "top_sellers": sorted(output, key=lambda item: item["sell_value"], reverse=True)[:5],
         "data_status": "ready",
+    }
+
+
+def _market_broker_summary_result(
+    db: Session,
+    from_date: date | None,
+    to_date: date | None,
+    days: int,
+) -> dict[str, Any]:
+    """Aggregate IDX's public whole-market broker totals by broker.
+
+    The public endpoint has no buyer/seller side and no stock code.  The API
+    therefore deliberately labels this result as market-wide transaction
+    activity rather than per-stock broker flow.
+    """
+
+    _validate_range(from_date, to_date)
+    statement = select(MarketBrokerSummaryDaily)
+    if from_date:
+        statement = statement.where(MarketBrokerSummaryDaily.trade_date >= from_date)
+    if to_date:
+        statement = statement.where(MarketBrokerSummaryDaily.trade_date <= to_date)
+    rows = list(
+        db.scalars(
+            statement.order_by(
+                MarketBrokerSummaryDaily.trade_date.desc(),
+                MarketBrokerSummaryDaily.value.desc(),
+            )
+        )
+    )
+    if not rows:
+        return {
+            "trading_dates": [],
+            "rows": [],
+            "top_by_value": [],
+            "top_by_volume": [],
+            "top_by_frequency": [],
+            "data_status": "Belum ada ringkasan broker pasar",
+            "scope": "whole_market",
+        }
+
+    dates = sorted({row.trade_date for row in rows}, reverse=True)[:days]
+    selected = [row for row in rows if row.trade_date in dates]
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in selected:
+        entry = grouped.setdefault(
+            row.broker_code,
+            {
+                "broker_code": row.broker_code,
+                "broker_name": row.broker_name,
+                "volume": 0,
+                "value": Decimal(0),
+                "frequency": 0,
+            },
+        )
+        entry["volume"] += row.volume or 0
+        entry["value"] += row.value or Decimal(0)
+        entry["frequency"] += row.frequency or 0
+    output = [
+        {
+            key: (float(value) if isinstance(value, Decimal) else value)
+            for key, value in entry.items()
+        }
+        for entry in grouped.values()
+    ]
+    return {
+        "trading_dates": [day.isoformat() for day in sorted(dates)],
+        "rows": sorted(output, key=lambda item: item["value"], reverse=True),
+        "top_by_value": sorted(output, key=lambda item: item["value"], reverse=True)[:5],
+        "top_by_volume": sorted(output, key=lambda item: item["volume"], reverse=True)[:5],
+        "top_by_frequency": sorted(output, key=lambda item: item["frequency"], reverse=True)[:5],
+        "data_status": "ready",
+        "scope": "whole_market",
     }
 
 
@@ -527,6 +607,67 @@ def create_app() -> FastAPI:
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
+    @app.get("/export/market-broker-summary.csv", response_class=Response)
+    def export_market_broker_csv(
+        from_date: date | None = Query(None, alias="from"),
+        to_date: date | None = Query(None, alias="to"),
+        days: int = Query(1, ge=1, le=60),
+        db: Session = Depends(get_db),
+    ):
+        summary = _market_broker_summary_result(db, from_date, to_date, days)
+        rows = summary["rows"]
+        if not rows:
+            raise HTTPException(
+                status_code=404,
+                detail="belum ada ringkasan broker seluruh pasar untuk diekspor",
+            )
+        fields = ["rank", "broker_code", "broker_name", "volume", "value", "frequency"]
+        output = StringIO(newline="")
+        writer = csv.writer(output)
+        writer.writerow(fields)
+        for rank, row in enumerate(rows, start=1):
+            writer.writerow(
+                [
+                    rank,
+                    *(
+                        row.get(field) if row.get(field) is not None else ""
+                        for field in fields[1:]
+                    ),
+                ]
+            )
+        return Response(
+            content="\ufeff" + output.getvalue(),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="idx_market_broker_summary_{days}d.csv"'
+                )
+            },
+        )
+
+    @app.get("/export/market-broker-summary.xlsx", response_class=Response)
+    def export_market_broker_excel(
+        from_date: date | None = Query(None, alias="from"),
+        to_date: date | None = Query(None, alias="to"),
+        days: int = Query(1, ge=1, le=60),
+        db: Session = Depends(get_db),
+    ):
+        summary = _market_broker_summary_result(db, from_date, to_date, days)
+        if not summary["rows"]:
+            raise HTTPException(
+                status_code=404,
+                detail="belum ada ringkasan broker seluruh pasar untuk diekspor",
+            )
+        return Response(
+            content=build_market_broker_workbook(summary),
+            media_type=EXCEL_MIME_TYPE,
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="idx_market_broker_summary_{days}d.xlsx"'
+                )
+            },
+        )
+
     @app.get("/latest", response_model=list[OHLCVOut])
     def latest(db: Session = Depends(get_db)):
         cached = cache.get("latest")
@@ -618,6 +759,15 @@ def create_app() -> FastAPI:
     ):
         return _broker_summary_result(db, symbol, from_date, to_date, days)
 
+    @app.get("/ui/api/market-broker-summary")
+    def ui_market_broker_summary(
+        from_date: date | None = Query(None, alias="from"),
+        to_date: date | None = Query(None, alias="to"),
+        days: int = Query(1, ge=1, le=60),
+        db: Session = Depends(get_db),
+    ):
+        return _market_broker_summary_result(db, from_date, to_date, days)
+
     @app.post("/ui/api/import/{dataset}")
     def import_dataset(
         dataset: str,
@@ -683,6 +833,22 @@ def create_app() -> FastAPI:
         return start_ui_job(
             "Scraping data terbaru",
             ["idx-platform", "daily", "--end", end_date.isoformat()],
+        )
+
+    @app.post("/ui/api/jobs/market-broker-summary", status_code=202)
+    def start_market_broker_summary(request: DateRangeJobRequest):
+        if request.start > request.end:
+            raise HTTPException(status_code=422, detail="Tanggal mulai tidak boleh setelah akhir")
+        return start_ui_job(
+            "Scraping ringkasan broker seluruh pasar",
+            [
+                "idx-platform",
+                "market-broker-summary",
+                "--start",
+                request.start.isoformat(),
+                "--end",
+                request.end.isoformat(),
+            ],
         )
 
     @app.post("/ui/api/jobs/backfill", status_code=202)

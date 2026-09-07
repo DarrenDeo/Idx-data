@@ -16,6 +16,7 @@ from app.pipeline.backfill import backfill_ohlcv
 from app.pipeline.corporate_actions import sync_corporate_actions
 from app.pipeline.daily import daily_market_update
 from app.pipeline.incremental import incremental_update
+from app.pipeline.market_broker import backfill_market_broker_summary
 from app.pipeline.symbols import sync_symbols
 
 
@@ -54,6 +55,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     daily = sub.add_parser("daily")
     daily.add_argument("--end", type=_date, default=date.today())
+
+    market_broker = sub.add_parser(
+        "market-broker-summary",
+        help="Fetch IDX's public whole-market broker summary",
+    )
+    market_broker.add_argument("--start", type=_date, required=True)
+    market_broker.add_argument("--end", type=_date, default=date.today())
 
     actions = sub.add_parser("corporate-actions")
     actions.add_argument("--symbols", nargs="+")
@@ -113,6 +121,21 @@ def main() -> None:
                         provider,
                         daily_market_update(
                             session, provider, args.end, concurrency=settings.idx_concurrency
+                        ),
+                    )
+                )
+            )
+        elif args.command == "market-broker-summary":
+            print(
+                _run_async(
+                    _run_with_provider(
+                        provider,
+                        backfill_market_broker_summary(
+                            session,
+                            provider,
+                            args.start,
+                            args.end,
+                            concurrency=1,
                         ),
                     )
                 )

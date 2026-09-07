@@ -34,6 +34,25 @@ class OHLCVRecord:
 
 
 @dataclass(slots=True)
+class MarketBrokerSummaryRecord:
+    """One broker's total market activity for a trading session.
+
+    IDX's public broker-summary endpoint is market-wide.  It reports total
+    volume, value, and frequency for each broker; it does not identify a
+    buyer/seller side or a particular stock.
+    """
+
+    trade_date: date
+    broker_code: str
+    broker_name: str | None
+    volume: int | str
+    value: Decimal | int | float | str
+    frequency: int | str
+    source: str = "idx_public"
+    raw: dict[str, Any] | None = None
+
+
+@dataclass(slots=True)
 class CorporateActionRecord:
     symbol: str
     ex_date: date
@@ -54,6 +73,12 @@ class MarketDataProvider(abc.ABC):
 
     @abc.abstractmethod
     async def get_daily_market_data(self, trade_date: date) -> list[OHLCVRecord]: ...
+
+    async def get_market_broker_summary(
+        self, trade_date: date
+    ) -> list[MarketBrokerSummaryRecord]:
+        """Return the public, market-wide broker summary for one session."""
+        raise NotImplementedError
 
     @abc.abstractmethod
     async def get_corporate_actions(
@@ -167,6 +192,63 @@ class IDXProvider(MarketDataProvider):
         )
         rows = payload.get("data", []) if isinstance(payload, dict) else []
         return [self.parse_ohlcv_item(item) for item in rows]
+
+    @staticmethod
+    def parse_market_broker_item(
+        item: dict[str, Any],
+        trade_date: date,
+    ) -> MarketBrokerSummaryRecord:
+        broker_code = (
+            item.get("IDFirm")
+            or item.get("BrokerCode")
+            or item.get("KodeBroker")
+            or item.get("FirmCode")
+        )
+        if not broker_code:
+            raise ValueError("broker summary row lacks broker code")
+        row_date = item.get("Date") or item.get("Tanggal") or item.get("date")
+        parsed_date = _parse_date(row_date) if row_date else trade_date
+        raw_volume = item.get("Volume", item.get("volume", 0)) or 0
+        raw_value = item.get("Value", item.get("value", 0)) or 0
+        raw_frequency = item.get("Frequency", item.get("frequency", 0)) or 0
+        try:
+            volume = int(float(raw_volume))
+        except (TypeError, ValueError):
+            volume = 0
+        try:
+            value = Decimal(str(raw_value))
+        except (InvalidOperation, TypeError, ValueError):
+            value = Decimal(0)
+        try:
+            frequency = int(float(raw_frequency))
+        except (TypeError, ValueError):
+            frequency = 0
+        return MarketBrokerSummaryRecord(
+            trade_date=parsed_date,
+            broker_code=str(broker_code).strip().upper(),
+            broker_name=(
+                item.get("FirmName")
+                or item.get("BrokerName")
+                or item.get("NamaBroker")
+            ),
+            volume=volume,
+            value=value,
+            frequency=frequency,
+            raw=item,
+        )
+
+    async def get_market_broker_summary(
+        self, trade_date: date
+    ) -> list[MarketBrokerSummaryRecord]:
+        payload = await self.client.get_json(
+            "/TradingSummary/GetBrokerSummary",
+            params={"date": trade_date.strftime("%Y%m%d"), "start": 0, "length": 9999},
+        )
+        rows = []
+        if isinstance(payload, dict):
+            rows = payload.get("data") or payload.get("replies") or []
+        result = [self.parse_market_broker_item(item, trade_date) for item in rows]
+        return sorted(result, key=lambda row: row.value, reverse=True)
 
     async def get_corporate_actions(
         self, symbol: str, start_date: date, end_date: date

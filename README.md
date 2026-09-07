@@ -52,7 +52,7 @@ docker compose exec api idx-platform sync-symbols
 docker compose --profile server up -d
 ```
 
-After pulling a version that adds analysis tables, run
+After pulling a version that adds analysis or market-broker tables, run
 `docker compose exec api idx-platform init-db` once more. The command uses
 `create_all` for missing tables and does not delete existing OHLCV data.
 
@@ -160,6 +160,13 @@ idx-platform daily --end 2026-08-31
 This starts at the day after the latest date stored anywhere in `ohlcv_daily`.
 Use `backfill` when you intentionally need to fill an older historical gap.
 
+Fetch the public IDX market-wide broker summary (total activity by broker,
+not per-stock buyer/seller data):
+
+```powershell
+idx-platform market-broker-summary --start 2026-08-24 --end 2026-08-28
+```
+
 Corporate actions and adjusted price materialization:
 
 ```powershell
@@ -193,9 +200,12 @@ most common terminal commands with buttons:
 - inspect the current process output and recent ETL status;
 - calculate MA5, MA10, MA20, MA50, momentum, volume ratio, volatility, and an
   explainable research baseline score;
+- fetch IDX's public whole-market broker summary (broker, total volume, total
+  value, and transaction frequency) for a date range;
 - import optional benchmark, foreign-flow, and broker-summary CSV datasets;
 - view Top 5 buyer/seller broker aggregates for 1, 5, or 10 trading sessions; and
-- download OHLCV and analysis results as CSV or formatted Excel.
+- download OHLCV, analysis, and market-wide broker results as CSV or formatted
+  Excel.
 
 The analysis tabs are deliberately labelled as research modes. `Multi-factor —
 Jim Simons` is a transparent multi-signal baseline, not a reproduction of a
@@ -236,6 +246,12 @@ redistribution. The public IDX OHLCV endpoint does not by itself provide a
 per-symbol buy/sell broker breakdown; configure an approved broker-data source
 before presenting those rows as market fact.
 
+The public IDX broker summary is a separate market-wide dataset. It is fetched
+with the `market-broker-summary` command or the dashboard button and is stored
+by trading date and broker code. It contains total market volume, value, and
+frequency only; it must not be described as BBCA (or another ticker's) Top 5
+buyer/seller data.
+
 Only one data operation can run at a time. Closing the browser does not stop an
 operation already started by the dashboard. The API container continues the job
 and the status appears again when the dashboard is reopened. UI-started jobs also
@@ -261,6 +277,7 @@ GET /export/ohlcv.csv?symbols=BBCA,BBRI,TLKM&from=2026-08-24&to=2026-08-28
 GET /export/ohlcv.xlsx?symbols=BBCA,BBRI,TLKM&from=2026-08-24&to=2026-08-28
 GET /ui/api/analysis?symbols=BBCA,BBRI&from=2026-01-01&to=2026-08-31
 GET /ui/api/broker-summary?symbol=BBCA&days=5
+GET /ui/api/market-broker-summary?from=2026-08-24&to=2026-08-28&days=5
 POST /ui/api/import/benchmark
 POST /ui/api/import/foreign-flow
 POST /ui/api/import/broker-summary
@@ -268,6 +285,8 @@ GET /export/analysis.csv?symbols=BBCA&from=2026-01-01&to=2026-08-31
 GET /export/analysis.xlsx?symbols=BBCA&from=2026-01-01&to=2026-08-31
 GET /export/broker-summary.csv?symbol=BBCA&days=5
 GET /export/broker-summary.xlsx?symbol=BBCA&days=5
+GET /export/market-broker-summary.csv?from=2026-08-24&to=2026-08-28&days=5
+GET /export/market-broker-summary.xlsx?from=2026-08-24&to=2026-08-28&days=5
 GET /docs
 ```
 

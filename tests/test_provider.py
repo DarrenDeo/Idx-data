@@ -87,3 +87,46 @@ async def test_historical_response_is_range_filtered():
     assert [row.trade_date for row in rows] == [date(2026, 8, 28)]
     assert client.calls[0][0] == "/ListedCompany/GetTradingInfoSS"
 
+
+def test_parse_market_broker_item_uses_idx_fields():
+    row = IDXProvider.parse_market_broker_item(
+        {
+            "IDFirm": "YP",
+            "FirmName": "Yapindo Sekuritas",
+            "Date": "2026-08-28T00:00:00",
+            "Volume": 123456,
+            "Value": 987654321.0,
+            "Frequency": 321,
+        },
+        date(2026, 8, 28),
+    )
+    assert row.trade_date == date(2026, 8, 28)
+    assert row.broker_code == "YP"
+    assert row.volume == 123456
+    assert row.value == 987654321.0
+
+
+@pytest.mark.asyncio
+async def test_market_broker_summary_fetches_public_endpoint():
+    client = FakeClient(
+        [
+            {
+                "data": [
+                    {
+                        "IDFirm": "YP",
+                        "FirmName": "Yapindo Sekuritas",
+                        "Volume": 10,
+                        "Value": 20,
+                        "Frequency": 3,
+                    }
+                ]
+            }
+        ]
+    )
+    provider = IDXProvider(client=client)
+    rows = await provider.get_market_broker_summary(date(2026, 8, 28))
+    assert rows[0].broker_code == "YP"
+    assert client.calls[0] == (
+        "/TradingSummary/GetBrokerSummary",
+        {"date": "20260828", "start": 0, "length": 9999},
+    )

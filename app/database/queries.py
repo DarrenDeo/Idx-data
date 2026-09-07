@@ -16,6 +16,7 @@ from app.database.models import (
     DataError,
     ETLRun,
     ForeignFlowDaily,
+    MarketBrokerSummaryDaily,
     OHLCVDaily,
     Stock,
 )
@@ -149,6 +150,24 @@ def upsert_broker_summary(session: Session, rows: Iterable[dict[str, Any]]) -> i
             BrokerSummaryDaily.symbol,
             BrokerSummaryDaily.trade_date,
             BrokerSummaryDaily.broker_code,
+        ],
+        set_={column: getattr(statement.excluded, column) for column in update_columns}
+        | {"ingested_at": func.now()},
+    )
+    session.execute(statement)
+    return len(values)
+
+
+def upsert_market_broker_summary(session: Session, rows: Iterable[dict[str, Any]]) -> int:
+    values = list(rows)
+    if not values:
+        return 0
+    statement = _insert_for(session, MarketBrokerSummaryDaily).values(values)
+    update_columns = ("broker_name", "volume", "value", "frequency", "source")
+    statement = statement.on_conflict_do_update(
+        index_elements=[
+            MarketBrokerSummaryDaily.trade_date,
+            MarketBrokerSummaryDaily.broker_code,
         ],
         set_={column: getattr(statement.excluded, column) for column in update_columns}
         | {"ingested_at": func.now()},

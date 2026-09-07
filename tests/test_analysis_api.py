@@ -6,7 +6,7 @@ from io import BytesIO
 from fastapi.testclient import TestClient
 
 from app.api.main import create_app
-from app.database.models import BenchmarkDaily, BrokerSummaryDaily
+from app.database.models import BenchmarkDaily, BrokerSummaryDaily, MarketBrokerSummaryDaily
 from app.database.queries import upsert_ohlcv, upsert_stocks
 from app.database.connection import get_db
 
@@ -47,6 +47,16 @@ def test_analysis_endpoint_and_exports(session):
             sell_value=Decimal("400000"),
         )
     )
+    session.add(
+        MarketBrokerSummaryDaily(
+            trade_date=date(2026, 2, 28),
+            broker_code="YP",
+            broker_name="Test Broker",
+            volume=500,
+            value=Decimal("2000000"),
+            frequency=12,
+        )
+    )
     session.commit()
     app = create_app()
     app.dependency_overrides[get_db] = lambda: session
@@ -60,6 +70,11 @@ def test_analysis_endpoint_and_exports(session):
     assert broker.status_code == 200
     assert broker.json()["top_buyers"][0]["broker_code"] == "YP"
 
+    market_broker = client.get("/ui/api/market-broker-summary?days=1")
+    assert market_broker.status_code == 200
+    assert market_broker.json()["scope"] == "whole_market"
+    assert market_broker.json()["top_by_value"][0]["broker_code"] == "YP"
+
     csv_response = client.get("/export/analysis.csv?symbols=BBCA&from=2026-02-20&to=2026-03-02")
     assert csv_response.status_code == 200
     assert "ma50" in csv_response.text
@@ -69,3 +84,8 @@ def test_analysis_endpoint_and_exports(session):
     with ZipFile(BytesIO(xlsx_response.content)) as workbook:
         assert "xl/worksheets/sheet2.xml" in workbook.namelist()
         assert b"Test Broker" in workbook.read("xl/worksheets/sheet2.xml")
+
+    market_xlsx = client.get("/export/market-broker-summary.xlsx?days=1")
+    assert market_xlsx.status_code == 200
+    with ZipFile(BytesIO(market_xlsx.content)) as workbook:
+        assert b"Market-wide" in workbook.read("xl/worksheets/sheet1.xml")

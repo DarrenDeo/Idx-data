@@ -81,6 +81,21 @@ CREATE TABLE IF NOT EXISTS broker_summary_daily (
 CREATE INDEX IF NOT EXISTS idx_broker_summary_symbol_date
 ON broker_summary_daily (symbol, trade_date DESC);
 
+CREATE TABLE IF NOT EXISTS market_broker_summary_daily (
+    trade_date DATE NOT NULL,
+    broker_code VARCHAR(16) NOT NULL,
+    broker_name TEXT,
+    volume BIGINT,
+    value NUMERIC(24,4),
+    frequency BIGINT,
+    source VARCHAR(50) NOT NULL DEFAULT 'idx_public',
+    ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (trade_date, broker_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_broker_summary_date
+ON market_broker_summary_daily (trade_date DESC);
+
 CREATE TABLE IF NOT EXISTS corporate_actions (
     id BIGSERIAL PRIMARY KEY,
     symbol VARCHAR(16) NOT NULL REFERENCES stocks(symbol) ON DELETE CASCADE,

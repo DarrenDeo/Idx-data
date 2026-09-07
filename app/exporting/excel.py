@@ -578,3 +578,134 @@ def build_broker_workbook(summary: dict[str, Any], records: Iterable[dict[str, A
         archive.writestr("xl/worksheets/sheet1.xml", summary_xml)
         archive.writestr("xl/worksheets/sheet2.xml", data_xml)
     return output.getvalue()
+
+
+def build_market_broker_workbook(
+    summary: dict[str, Any], *, generated_at: datetime | None = None
+) -> bytes:
+    """Build a formatted workbook for IDX's whole-market broker totals."""
+
+    generated_at = generated_at or datetime.now(timezone.utc)
+    values = list(summary.get("rows", []))
+    columns = [
+        ("Rank", "rank", "number"),
+        ("Broker Code", "broker_code", "text"),
+        ("Broker Name", "broker_name", "text"),
+        ("Volume", "volume", "number"),
+        ("Value (Rp)", "value", "currency"),
+        ("Frequency", "frequency", "number"),
+    ]
+    letters = "ABCDEF"
+    headers = "".join(
+        _text_cell(f"{letters[index]}4", label, 2)
+        for index, (label, _key, _kind) in enumerate(columns)
+    )
+    data_rows: list[str] = [
+        '<row r="1" ht="26" customHeight="1">'
+        + _text_cell("A1", "IDX Market-wide Broker Summary", 1)
+        + "</row>",
+        '<row r="2">'
+        + _text_cell(
+            "A2",
+            f"{', '.join(summary.get('trading_dates', []))} • Generated {generated_at.isoformat(timespec='seconds')}",
+            8,
+        )
+        + "</row>",
+        f"<row r=\"4\">{headers}</row>",
+    ]
+    for row_number, record in enumerate(values, start=5):
+        row_values = {"rank": row_number - 4, **record}
+        cells: list[str] = []
+        for index, (_label, key, kind) in enumerate(columns):
+            reference = f"{letters[index]}{row_number}"
+            value = row_values.get(key)
+            if value is None or value == "":
+                cells.append(_text_cell(reference, "", 9))
+            elif kind == "text":
+                cells.append(_text_cell(reference, value, 9))
+            elif kind == "currency":
+                cells.append(_number_cell(reference, value, 4))
+            else:
+                cells.append(_number_cell(reference, value, 5))
+        data_rows.append(f'<row r="{row_number}">' + "".join(cells) + "</row>")
+    last_row = max(5, 4 + len(values))
+    data_xml = _worksheet_xml(
+        data_rows,
+        dimensions=f"A1:F{last_row}",
+        columns=[8, 14, 30, 18, 22, 15],
+        freeze_row=4,
+        auto_filter=f"A4:F{last_row}" if values else None,
+        merged_cells=["A1:F1", "A2:F2"],
+    )
+    summary_rows = [
+        '<row r="1" ht="26" customHeight="1">'
+        + _text_cell("A1", "IDX Market-wide Broker Summary", 1)
+        + "</row>",
+        '<row r="3">'
+        + _text_cell("A3", "Scope", 6)
+        + _text_cell("B3", "Whole market", 10)
+        + "</row>",
+        '<row r="4">'
+        + _text_cell("A4", "Trading Dates", 6)
+        + _text_cell("B4", ", ".join(summary.get("trading_dates", [])), 10)
+        + "</row>",
+        '<row r="5">'
+        + _text_cell("A5", "Data status", 6)
+        + _text_cell("B5", summary.get("data_status", ""), 10)
+        + "</row>",
+        '<row r="6">'
+        + _text_cell("A6", "Method", 6)
+        + _text_cell("B6", "IDX public broker summary; no stock or buy/sell side", 10)
+        + "</row>",
+    ]
+    summary_xml = _worksheet_xml(
+        summary_rows,
+        dimensions="A1:B6",
+        columns=[22, 80],
+        freeze_row=0,
+        merged_cells=["A1:B1"],
+    )
+    content_types = """<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+</Types>"""
+    package_rels = """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>"""
+    workbook_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <bookViews><workbookView activeTab="1"/></bookViews>
+  <sheets><sheet name="Summary" sheetId="1" r:id="rId1"/><sheet name="Broker Summary" sheetId="2" r:id="rId2"/></sheets>
+  <calcPr calcId="191029" fullCalcOnLoad="1" forceFullCalc="1"/>
+</workbook>"""
+    workbook_rels = """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>"""
+    timestamp = generated_at.isoformat(timespec="seconds").replace("+00:00", "Z")
+    core_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>IDX Market-wide Broker Summary</dc:title><dc:creator>IDX OHLCV Platform</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">{timestamp}</dcterms:created></cp:coreProperties>"""
+    app_xml = """<?xml version="1.0" encoding="UTF-8"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>IDX OHLCV Platform</Application></Properties>"""
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", package_rels)
+        archive.writestr("docProps/core.xml", core_xml)
+        archive.writestr("docProps/app.xml", app_xml)
+        archive.writestr("xl/workbook.xml", workbook_xml)
+        archive.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+        archive.writestr("xl/styles.xml", _styles_xml())
+        archive.writestr("xl/worksheets/sheet1.xml", summary_xml)
+        archive.writestr("xl/worksheets/sheet2.xml", data_xml)
+    return output.getvalue()
