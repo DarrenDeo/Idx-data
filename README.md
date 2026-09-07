@@ -4,11 +4,9 @@ A small, restartable Python/PostgreSQL platform for IDX symbol synchronization,
 historical daily OHLCV backfill, incremental updates, validation, corporate
 actions, Airflow scheduling, and an internal FastAPI service.
 
-The implementation follows [PROJECT_SPEC.md](PROJECT_SPEC.md) and the complete
-owner specification transcription in
-[docs/Accessing_Complete_OHLCV_Data_IDX.md](docs/Accessing_Complete_OHLCV_Data_IDX.md).
-Implementation status and evidence are tracked in
-[PDF_TRACEABILITY.md](PDF_TRACEABILITY.md).
+The implementation contract is kept in the application code, SQL schema, and
+the operational guidance in this README. Historical design/research artifacts
+are intentionally not part of the public checkout.
 
 ## Architecture
 
@@ -53,6 +51,10 @@ docker compose exec api idx-platform init-db
 docker compose exec api idx-platform sync-symbols
 docker compose --profile server up -d
 ```
+
+After pulling a version that adds analysis tables, run
+`docker compose exec api idx-platform init-db` once more. The command uses
+`create_all` for missing tables and does not delete existing OHLCV data.
 
 PostgreSQL is exposed only on `127.0.0.1:55432` by default so it does not
 collide with an existing local PostgreSQL installation on port 5432. Change
@@ -188,8 +190,51 @@ most common terminal commands with buttons:
 - synchronize the IDX symbol list;
 - run the safe daily market update;
 - backfill up to 20 selected symbols for a date range;
-- inspect the current process output and recent ETL status; and
-- download the currently selected symbols and dates as CSV or formatted Excel.
+- inspect the current process output and recent ETL status;
+- calculate MA5, MA10, MA20, MA50, momentum, volume ratio, volatility, and an
+  explainable research baseline score;
+- import optional benchmark, foreign-flow, and broker-summary CSV datasets;
+- view Top 5 buyer/seller broker aggregates for 1, 5, or 10 trading sessions; and
+- download OHLCV and analysis results as CSV or formatted Excel.
+
+The analysis tabs are deliberately labelled as research modes. `Multi-factor —
+Jim Simons` is a transparent multi-signal baseline, not a reproduction of a
+private Renaissance Technologies formula. At each valid trading session it
+combines trend alignment (Close > MA5 > MA10 > MA20 > MA50), 5/10/20-session
+returns, volume ratio, and a volatility penalty into a score from 0 to 100.
+The score is only marked ready when the required history exists; MA50 therefore
+needs 50 valid closes.
+
+`Probability — Bill Benter` adapts the public idea of combining a model
+probability with a market probability; it does not claim to reproduce Benter's
+private horse-racing implementation. The current baseline maps the multi-factor
+score to `p_model`, maps the IHSG 20-session return to `p_market`, and combines
+their logits with weights 65% and 35% to produce `p_final`. `Gabungan` reports
+positive confluence only when both the score and probability pass the displayed
+thresholds. These are research and backtesting aids, not calibrated investment
+recommendations or guarantees of return.
+
+### Optional analysis CSV imports
+
+The dashboard accepts CSV content for datasets that are not part of the current
+public IDX OHLCV feed. Supported headers are:
+
+```text
+# benchmark (IHSG is the default benchmark)
+trade_date,benchmark,open,high,low,close,volume
+
+# foreign-flow
+trade_date,symbol,foreign_buy_volume,foreign_sell_volume,foreign_buy_value,foreign_sell_value,foreign_net_value,foreign_average_buy,foreign_average_sell
+
+# broker-summary
+trade_date,symbol,broker_code,broker_name,buy_volume,sell_volume,buy_value,sell_value,buy_average,sell_average,net_volume,net_value,buy_frequency,sell_frequency
+```
+
+Imports are upserts keyed by symbol/date (and broker code for broker summary).
+Use data from a source whose licence permits your intended use and
+redistribution. The public IDX OHLCV endpoint does not by itself provide a
+per-symbol buy/sell broker breakdown; configure an approved broker-data source
+before presenting those rows as market fact.
 
 Only one data operation can run at a time. Closing the browser does not stop an
 operation already started by the dashboard. The API container continues the job
@@ -214,6 +259,15 @@ GET /etl-runs
 GET /export
 GET /export/ohlcv.csv?symbols=BBCA,BBRI,TLKM&from=2026-08-24&to=2026-08-28
 GET /export/ohlcv.xlsx?symbols=BBCA,BBRI,TLKM&from=2026-08-24&to=2026-08-28
+GET /ui/api/analysis?symbols=BBCA,BBRI&from=2026-01-01&to=2026-08-31
+GET /ui/api/broker-summary?symbol=BBCA&days=5
+POST /ui/api/import/benchmark
+POST /ui/api/import/foreign-flow
+POST /ui/api/import/broker-summary
+GET /export/analysis.csv?symbols=BBCA&from=2026-01-01&to=2026-08-31
+GET /export/analysis.xlsx?symbols=BBCA&from=2026-01-01&to=2026-08-31
+GET /export/broker-summary.csv?symbol=BBCA&days=5
+GET /export/broker-summary.xlsx?symbol=BBCA&days=5
 GET /docs
 ```
 
@@ -226,9 +280,10 @@ exports by symbol or date range.
 
 ## Pop!_OS always-on server
 
-The complete lightweight self-hosting, private Tailscale access, restart, update,
-and backup instructions are in
-[`docs/POP_OS_DEPLOYMENT.md`](docs/POP_OS_DEPLOYMENT.md).
+Run the Compose server profile on the Pop!_OS host, then expose only the
+gateway you intend to share. Keep database and Redis ports bound to localhost;
+the deployment-specific host commands should remain outside this public code
+checkout.
 
 ## Tests and validation
 
@@ -260,11 +315,10 @@ The query must return zero rows.
 
 ## Data-source status and legal note
 
-The current public endpoint patterns, headers, reference review, and the failed
-host-level live access attempt are documented in
-[docs/DATA_SOURCE.md](docs/DATA_SOURCE.md). This repository does not claim live
-IDX access when it has not been verified. Review IDX terms and obtain appropriate
-official/commercial data rights before commercial use or redistribution.
+The current public endpoint behavior is implemented behind the replaceable
+provider boundary. This repository does not claim live IDX access when it has
+not been verified. Review IDX terms and obtain appropriate official/commercial
+data rights before commercial use or redistribution.
 
 ## Operational guidance
 

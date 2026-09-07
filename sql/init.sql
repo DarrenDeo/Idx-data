@@ -24,6 +24,63 @@ CREATE TABLE IF NOT EXISTS ohlcv_daily (
 CREATE INDEX IF NOT EXISTS idx_symbol_date
 ON ohlcv_daily (symbol, trade_date DESC);
 
+CREATE TABLE IF NOT EXISTS benchmark_daily (
+    benchmark VARCHAR(32) NOT NULL,
+    trade_date DATE NOT NULL,
+    open NUMERIC(18,4),
+    high NUMERIC(18,4),
+    low NUMERIC(18,4),
+    close NUMERIC(18,4) NOT NULL,
+    volume BIGINT,
+    source VARCHAR(50) NOT NULL DEFAULT 'import',
+    ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (benchmark, trade_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_benchmark_date
+ON benchmark_daily (benchmark, trade_date DESC);
+
+CREATE TABLE IF NOT EXISTS foreign_flow_daily (
+    symbol VARCHAR(16) NOT NULL,
+    trade_date DATE NOT NULL,
+    foreign_buy_volume BIGINT,
+    foreign_sell_volume BIGINT,
+    foreign_buy_value NUMERIC(24,4),
+    foreign_sell_value NUMERIC(24,4),
+    foreign_net_value NUMERIC(24,4),
+    foreign_average_buy NUMERIC(18,4),
+    foreign_average_sell NUMERIC(18,4),
+    source VARCHAR(50) NOT NULL DEFAULT 'import',
+    ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (symbol, trade_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_foreign_flow_date
+ON foreign_flow_daily (symbol, trade_date DESC);
+
+CREATE TABLE IF NOT EXISTS broker_summary_daily (
+    symbol VARCHAR(16) NOT NULL,
+    trade_date DATE NOT NULL,
+    broker_code VARCHAR(16) NOT NULL,
+    broker_name TEXT,
+    buy_volume BIGINT,
+    sell_volume BIGINT,
+    buy_value NUMERIC(24,4),
+    sell_value NUMERIC(24,4),
+    buy_average NUMERIC(18,4),
+    sell_average NUMERIC(18,4),
+    net_volume BIGINT,
+    net_value NUMERIC(24,4),
+    buy_frequency BIGINT,
+    sell_frequency BIGINT,
+    source VARCHAR(50) NOT NULL DEFAULT 'import',
+    ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (symbol, trade_date, broker_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_broker_summary_symbol_date
+ON broker_summary_daily (symbol, trade_date DESC);
+
 CREATE TABLE IF NOT EXISTS corporate_actions (
     id BIGSERIAL PRIMARY KEY,
     symbol VARCHAR(16) NOT NULL REFERENCES stocks(symbol) ON DELETE CASCADE,
@@ -72,4 +129,3 @@ CREATE TABLE IF NOT EXISTS adjusted_prices (
 -- Yearly range partitioning is deliberately deferred until the fact table grows
 -- toward the specification's ~50M-row threshold. Retrofitting it earlier would
 -- add operational complexity without improving the expected ~4.5M-row workload.
-

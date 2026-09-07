@@ -64,6 +64,82 @@ class OHLCVDaily(Base):
 Index("idx_symbol_date", OHLCVDaily.symbol, OHLCVDaily.trade_date.desc())
 
 
+class BenchmarkDaily(Base):
+    """Daily close data for IHSG or another benchmark/index."""
+
+    __tablename__ = "benchmark_daily"
+
+    benchmark: Mapped[str] = mapped_column(String(32), primary_key=True)
+    trade_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    open: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    high: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    low: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    close: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    volume: Mapped[int | None] = mapped_column(BigInteger)
+    source: Mapped[str] = mapped_column(String(50), nullable=False, default="import")
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+Index("idx_benchmark_date", BenchmarkDaily.benchmark, BenchmarkDaily.trade_date.desc())
+
+
+class ForeignFlowDaily(Base):
+    """Optional daily foreign investor flow imported from a licensed source."""
+
+    __tablename__ = "foreign_flow_daily"
+
+    symbol: Mapped[str] = mapped_column(String(16), primary_key=True)
+    trade_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    foreign_buy_volume: Mapped[int | None] = mapped_column(BigInteger)
+    foreign_sell_volume: Mapped[int | None] = mapped_column(BigInteger)
+    foreign_buy_value: Mapped[Decimal | None] = mapped_column(Numeric(24, 4))
+    foreign_sell_value: Mapped[Decimal | None] = mapped_column(Numeric(24, 4))
+    foreign_net_value: Mapped[Decimal | None] = mapped_column(Numeric(24, 4))
+    foreign_average_buy: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    foreign_average_sell: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    source: Mapped[str] = mapped_column(String(50), nullable=False, default="import")
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+Index("idx_foreign_flow_date", ForeignFlowDaily.symbol, ForeignFlowDaily.trade_date.desc())
+
+
+class BrokerSummaryDaily(Base):
+    """Per-symbol broker activity imported from an approved broker-data source."""
+
+    __tablename__ = "broker_summary_daily"
+
+    symbol: Mapped[str] = mapped_column(String(16), primary_key=True)
+    trade_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    broker_code: Mapped[str] = mapped_column(String(16), primary_key=True)
+    broker_name: Mapped[str | None] = mapped_column(Text)
+    buy_volume: Mapped[int | None] = mapped_column(BigInteger)
+    sell_volume: Mapped[int | None] = mapped_column(BigInteger)
+    buy_value: Mapped[Decimal | None] = mapped_column(Numeric(24, 4))
+    sell_value: Mapped[Decimal | None] = mapped_column(Numeric(24, 4))
+    buy_average: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    sell_average: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    net_volume: Mapped[int | None] = mapped_column(BigInteger)
+    net_value: Mapped[Decimal | None] = mapped_column(Numeric(24, 4))
+    buy_frequency: Mapped[int | None] = mapped_column(BigInteger)
+    sell_frequency: Mapped[int | None] = mapped_column(BigInteger)
+    source: Mapped[str] = mapped_column(String(50), nullable=False, default="import")
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+Index(
+    "idx_broker_summary_symbol_date",
+    BrokerSummaryDaily.symbol,
+    BrokerSummaryDaily.trade_date.desc(),
+)
+
+
 class CorporateAction(Base):
     __tablename__ = "corporate_actions"
     __table_args__ = (

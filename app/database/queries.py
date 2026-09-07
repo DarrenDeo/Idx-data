@@ -9,7 +9,16 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from app.database.models import CorporateAction, DataError, ETLRun, OHLCVDaily, Stock
+from app.database.models import (
+    BenchmarkDaily,
+    BrokerSummaryDaily,
+    CorporateAction,
+    DataError,
+    ETLRun,
+    ForeignFlowDaily,
+    OHLCVDaily,
+    Stock,
+)
 
 
 def _insert_for(session: Session, model: type[Any]):
@@ -64,6 +73,85 @@ def upsert_ohlcv(session: Session, rows: Iterable[dict[str, Any]]) -> int:
             "source": statement.excluded.source,
             "ingested_at": func.now(),
         },
+    )
+    session.execute(statement)
+    return len(values)
+
+
+def upsert_benchmarks(session: Session, rows: Iterable[dict[str, Any]]) -> int:
+    values = list(rows)
+    if not values:
+        return 0
+    statement = _insert_for(session, BenchmarkDaily).values(values)
+    statement = statement.on_conflict_do_update(
+        index_elements=[BenchmarkDaily.benchmark, BenchmarkDaily.trade_date],
+        set_={
+            "open": statement.excluded.open,
+            "high": statement.excluded.high,
+            "low": statement.excluded.low,
+            "close": statement.excluded.close,
+            "volume": statement.excluded.volume,
+            "source": statement.excluded.source,
+            "ingested_at": func.now(),
+        },
+    )
+    session.execute(statement)
+    return len(values)
+
+
+def upsert_foreign_flow(session: Session, rows: Iterable[dict[str, Any]]) -> int:
+    values = list(rows)
+    if not values:
+        return 0
+    statement = _insert_for(session, ForeignFlowDaily).values(values)
+    statement = statement.on_conflict_do_update(
+        index_elements=[ForeignFlowDaily.symbol, ForeignFlowDaily.trade_date],
+        set_={
+            column: getattr(statement.excluded, column)
+            for column in (
+                "foreign_buy_volume",
+                "foreign_sell_volume",
+                "foreign_buy_value",
+                "foreign_sell_value",
+                "foreign_net_value",
+                "foreign_average_buy",
+                "foreign_average_sell",
+                "source",
+            )
+        }
+        | {"ingested_at": func.now()},
+    )
+    session.execute(statement)
+    return len(values)
+
+
+def upsert_broker_summary(session: Session, rows: Iterable[dict[str, Any]]) -> int:
+    values = list(rows)
+    if not values:
+        return 0
+    statement = _insert_for(session, BrokerSummaryDaily).values(values)
+    update_columns = (
+        "broker_name",
+        "buy_volume",
+        "sell_volume",
+        "buy_value",
+        "sell_value",
+        "buy_average",
+        "sell_average",
+        "net_volume",
+        "net_value",
+        "buy_frequency",
+        "sell_frequency",
+        "source",
+    )
+    statement = statement.on_conflict_do_update(
+        index_elements=[
+            BrokerSummaryDaily.symbol,
+            BrokerSummaryDaily.trade_date,
+            BrokerSummaryDaily.broker_code,
+        ],
+        set_={column: getattr(statement.excluded, column) for column in update_columns}
+        | {"ingested_at": func.now()},
     )
     session.execute(statement)
     return len(values)
