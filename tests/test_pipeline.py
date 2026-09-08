@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 from sqlalchemy import func, select
 
-from app.database.models import DataError, OHLCVDaily, Stock
+from app.database.models import DataError, OHLCVDaily, Stock, StockSummaryDaily
 from app.database.queries import upsert_stocks
 from app.downloader.provider import CorporateActionRecord, MarketDataProvider, OHLCVRecord, SymbolRecord
 from app.pipeline.backfill import backfill_ohlcv
@@ -47,6 +47,12 @@ class DailyProviderWithNoTradeRow(DailyStaticProvider):
             OHLCVRecord("BBCA", trade_date, 10, 12, 9, 11, 100, source="test"),
             OHLCVRecord("BBRI", trade_date, 0, 0, 0, 21, 0, source="test"),
         ]
+
+
+class DailyProviderWithIncompleteCandle(DailyStaticProvider):
+    async def get_daily_market_data(self, trade_date):
+        self.daily_calls.append(trade_date)
+        return [OHLCVRecord("ACST", trade_date, 0, 88, 87, 87, 302500, source="test", raw={"StockName": "Acset", "ForeignBuy": 1000, "ForeignSell": 500})]
 
 
 @pytest.mark.asyncio
@@ -151,3 +157,19 @@ async def test_daily_bulk_backfill_skips_zero_volume_rows_without_recording_erro
     }
     assert session.scalar(select(func.count()).select_from(OHLCVDaily)) == 1
     assert session.scalar(select(func.count()).select_from(DataError)) == 0
+
+
+@pytest.mark.asyncio
+async def test_incomplete_candle_keeps_stock_summary_and_foreign_fields(session):
+    result = await backfill_ohlcv(
+        session,
+        DailyProviderWithIncompleteCandle(),
+        ["ACST"],
+        date(2026, 8, 28),
+        date(2026, 8, 28),
+        concurrency=1,
+    )
+    assert result["rows_loaded"] == 0
+    assert result["rows_rejected"] == 1
+    assert session.query(StockSummaryDaily).count() == 1
+    assert session.query(StockSummaryDaily).one().foreign_buy_volume == 1000

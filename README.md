@@ -130,8 +130,10 @@ company metadata. Rows with zero executed volume are classified as no-trade and
 reported as `rows_skipped`; they are neither fabricated into candles nor logged
 as validation errors. Positive-volume rows for which IDX reports both
 `OpenPrice = 0` and `FirstTrade = 0` remain quarantined in `data_errors`, because
-there is no truthful opening price to persist. Each date commits independently
-for safe restart.
+there is no truthful opening price to persist. The complete Stock Summary and
+foreign-volume payload is still retained in its companion tables, so a
+quarantined candle does not discard the other official IDX fields. Each date
+commits independently for safe restart.
 
 Full backfill capability (do this only after the small test succeeds):
 
@@ -165,6 +167,9 @@ not per-stock buyer/seller data):
 
 ```powershell
 idx-platform market-broker-summary --start 2026-08-24 --end 2026-08-28
+
+# IDX index summary (IHSG/COMPOSITE and other indexes)
+idx-platform index-summary --start 2026-08-24 --end 2026-08-28
 ```
 
 Corporate actions and adjusted price materialization:
@@ -194,18 +199,32 @@ Open <http://localhost/> after the server starts. The dashboard replaces the
 most common terminal commands with buttons:
 
 - filter and display OHLCV data for one or more symbols;
+- show MA5, MA10, MA20, and MA50 beside the OHLCV rows (trading-session windows);
 - synchronize the IDX symbol list;
 - run the safe daily market update;
 - backfill up to 20 selected symbols for a date range;
 - inspect the current process output and recent ETL status;
-- calculate MA5, MA10, MA20, MA50, momentum, volume ratio, volatility, and an
-  explainable research baseline score;
+- calculate MA5, MA10, MA20, MA50, EMA/RSI/ATR, momentum, mean-reversion,
+  volume ratio, volatility, regime, relative strength, flow confirmation, and
+  an explainable research baseline score;
 - fetch IDX's public whole-market broker summary (broker, total volume, total
   value, and transaction frequency) for a date range;
+- re-import a previously exported OHLCV CSV without deleting existing rows;
+- persist the complete IDX Stock Summary payload (value, frequency, foreign
+  buy/sell volume, listed/tradeable shares, and raw payload);
+- fetch and store the public IDX Index Summary for IHSG/COMPOSITE and other
+  indexes;
 - import optional benchmark, foreign-flow, and broker-summary CSV datasets;
+- import order-book snapshots, intraday trades, quarterly fundamentals, event
+  calendars, and news/sentiment records without inventing missing values;
 - view Top 5 buyer/seller broker aggregates for 1, 5, or 10 trading sessions; and
-- download OHLCV, analysis, and market-wide broker results as CSV or formatted
-  Excel.
+- run a leakage-aware walk-forward research check and ATR-based position-size
+  helper;
+- download OHLCV, analysis, Stock Summary, index, flow, adjusted-price, and
+  market-wide broker results as CSV or formatted Excel;
+- import either CSV or `.xlsx` files for every supported optional dataset, and
+  inspect per-symbol order-book, intraday, fundamental, event, and news
+  summaries from the dashboard.
 
 The analysis tabs are deliberately labelled as research modes. `Multi-factor —
 Jim Simons` is a transparent multi-signal baseline, not a reproduction of a
@@ -224,10 +243,15 @@ positive confluence only when both the score and probability pass the displayed
 thresholds. These are research and backtesting aids, not calibrated investment
 recommendations or guarantees of return.
 
-### Optional analysis CSV imports
+### CSV and Excel imports
 
-The dashboard accepts CSV content for datasets that are not part of the current
-public IDX OHLCV feed. Supported headers are:
+The dashboard accepts CSV or `.xlsx` uploads for OHLCV exports and for datasets
+that are not part of the current public IDX OHLCV feed. Supported headers are:
+
+```text
+# OHLCV export (the app also accepts this app's own CSV export)
+symbol,trade_date,currency,open,high,low,close,volume
+```
 
 ```text
 # benchmark (IHSG is the default benchmark)
@@ -251,6 +275,36 @@ with the `market-broker-summary` command or the dashboard button and is stored
 by trading date and broker code. It contains total market volume, value, and
 frequency only; it must not be described as BBCA (or another ticker's) Top 5
 buyer/seller data.
+
+The public IDX stock-summary response also exposes fields such as company name,
+value, frequency, and foreign buy/sell columns. The application now stores those
+fields in `stock_summary_daily` and uses the foreign volume fields to populate
+the automatic foreign-flow volume series. IDX does not publish a separate
+foreign buy/sell value in this payload, so value and average fields remain NULL
+until an official value feed is connected; the application never fabricates
+those values.
+
+The dashboard derives VWAP (`value / volume`), market-cap proxy
+(`close * listed_shares`), free-float-share proxy (`tradeable_shares`),
+free-float percentage, and free-float market-cap proxy from the official fields.
+These are explicitly labelled derived values; they are not a replacement for a
+licensed free-float classification feed.
+
+`index-summary` fetches IDX's public index endpoint and keeps both a detailed
+`index_summary_daily` table and the compatibility `benchmark_daily` table for
+relative-return analytics. Run `idx-platform index-summary --start YYYY-MM-DD
+--end YYYY-MM-DD` after a fresh clone, or use the dashboard button. The command
+automatically fetches a 60-calendar-day buffer before the requested start so
+the regime and combined probability model have at least 21 IHSG trading
+observations for their 20-session benchmark return.
+
+Order book, intraday trades, per-stock broker detail, fundamentals, event
+calendar extensions, and news are supported data contracts, CSV/XLSX import
+routes, generic exports, and per-symbol summary endpoints.
+They require a licensed/approved provider or CSV because the public IDX
+endpoints used by this project do not expose all of those fields. In particular,
+the public broker summary is whole-market activity and cannot be relabelled as
+Top 5 buyers/sellers for a specific ticker.
 
 Only one data operation can run at a time. Closing the browser does not stop an
 operation already started by the dashboard. The API container continues the job
@@ -276,11 +330,30 @@ GET /export
 GET /export/ohlcv.csv?symbols=BBCA,BBRI,TLKM&from=2026-08-24&to=2026-08-28
 GET /export/ohlcv.xlsx?symbols=BBCA,BBRI,TLKM&from=2026-08-24&to=2026-08-28
 GET /ui/api/analysis?symbols=BBCA,BBRI&from=2026-01-01&to=2026-08-31
+GET /ui/api/backtest?symbols=BBCA&horizon=5
+GET /ui/api/stock-summary?symbols=BBCA
+GET /ui/api/index-summary?benchmark=COMPOSITE
 GET /ui/api/broker-summary?symbol=BBCA&days=5
 GET /ui/api/market-broker-summary?from=2026-08-24&to=2026-08-28&days=5
+GET /ui/api/symbol-features?symbol=BBCA&date=2026-08-28
+POST /ui/api/import/ohlcv
+POST /ui/api/import/stock-summary
 POST /ui/api/import/benchmark
+POST /ui/api/import/index-summary
 POST /ui/api/import/foreign-flow
 POST /ui/api/import/broker-summary
+POST /ui/api/import/order-book
+POST /ui/api/import/intraday-trades
+POST /ui/api/import/fundamentals
+POST /ui/api/import/events
+POST /ui/api/import/news
+POST /ui/api/import-upload/ohlcv  (multipart CSV/XLSX upload)
+
+Generic optional-dataset exports are also available at
+`/export/feature/{dataset}.csv` and `/export/feature/{dataset}.xlsx` for
+`stock-summary`, `index-summary`, `foreign-flow`, `broker-summary`,
+`order-book`, `intraday-trades`, `fundamentals`, `events`, `news`, and
+`adjusted-ohlcv`.
 GET /export/analysis.csv?symbols=BBCA&from=2026-01-01&to=2026-08-31
 GET /export/analysis.xlsx?symbols=BBCA&from=2026-01-01&to=2026-08-31
 GET /export/broker-summary.csv?symbol=BBCA&days=5
@@ -342,6 +415,9 @@ data rights before commercial use or redistribution.
 ## Operational guidance
 
 - Keep `IDX_CONCURRENCY` conservative (default `5`).
+- `IDX_REQUEST_DELAY` spaces request starts (default `0.25s`) and retryable
+  HTTP 429 responses use bounded exponential backoff; increase the delay or
+  lower concurrency if IDX rate-limits a long run.
 - `IDX_TOTAL_TIMEOUT` bounds each endpoint operation to 60 seconds by default,
   including retries and backoff.
 - One browser session is shared for the command lifetime and closed only after

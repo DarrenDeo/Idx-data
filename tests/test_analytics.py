@@ -35,6 +35,9 @@ def test_analysis_calculates_ma50_and_research_fields():
     assert latest["p_model"] is not None
     assert latest["p_final"] is None
     assert latest["probability_status"] == "Benchmark diperlukan untuk model gabungan"
+    assert latest["benchmark_observation_count"] == 0
+    assert latest["benchmark_required_observations"] == 21
+    assert latest["benchmark_status"] == "Benchmark IHSG belum cukup (0/21 hari bursa)"
 
 
 def test_analysis_uses_benchmark_for_combined_probability():
@@ -57,3 +60,5 @@ def test_analysis_uses_benchmark_for_combined_probability():
     assert result[-1]["p_final"] is not None
     assert result[-1]["edge"] is not None
     assert result[-1]["probability_status"] == "Baseline terkalibrasi dengan benchmark"
+    assert result[-1]["benchmark_observation_count"] == 60
+    assert result[-1]["benchmark_status"] == "Benchmark IHSG siap untuk model gabungan"

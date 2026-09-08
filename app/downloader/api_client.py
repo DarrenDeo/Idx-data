@@ -51,6 +51,8 @@ class AsyncIDXClient:
         self._owns_session = False
         self._session_ready = session is not None
         self._session_lock = asyncio.Lock()
+        self._rate_lock = asyncio.Lock()
+        self._next_request_at = 0.0
         self._sleep = sleep
 
     async def __aenter__(self) -> "AsyncIDXClient":
@@ -133,6 +135,18 @@ class AsyncIDXClient:
                 log.warning("IDX session warm-up failed; continuing with API request: %s", exc)
             self._session_ready = True
 
+    async def _throttle_request_start(self) -> None:
+        """Space request starts to avoid burst-triggering IDX HTTP 429s."""
+
+        if self.request_delay <= 0:
+            return
+        loop = asyncio.get_running_loop()
+        async with self._rate_lock:
+            wait_for = self._next_request_at - loop.time()
+            if wait_for > 0:
+                await self._sleep(wait_for)
+            self._next_request_at = loop.time() + self.request_delay
+
     async def _get_json_with_retries(
         self, endpoint: str, params: dict[str, Any] | None = None
     ) -> Any:
@@ -150,6 +164,7 @@ class AsyncIDXClient:
                         self.timeout,
                     )
                     async with asyncio.timeout(self.timeout):
+                        await self._throttle_request_start()
                         response = await self._session.get(
                             url,
                             params=params,
@@ -158,8 +173,6 @@ class AsyncIDXClient:
                             timeout=self.timeout,
                         )
                     if response.status_code == 200:
-                        if self.request_delay:
-                            await self._sleep(self.request_delay)
                         return response.json()
                     if response.status_code not in RETRYABLE_STATUS:
                         raise ProviderHTTPError(

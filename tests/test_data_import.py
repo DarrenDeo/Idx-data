@@ -21,3 +21,16 @@ def test_parse_benchmark_requires_close():
         assert "missing close" in str(exc)
     else:
         raise AssertionError("expected missing close validation")
+
+
+def test_parse_ohlcv_export_csv():
+    rows, warnings = parse_dataset(
+        "ohlcv",
+        "symbol,trade_date,currency,open,high,low,close,volume\n"
+        "BBCA,2026-08-28,IDR,6425,6525,6400,6475,156445200\n",
+        source="export.csv",
+    )
+    assert warnings == []
+    assert rows[0]["symbol"] == "BBCA"
+    assert str(rows[0]["close"]) == "6475"
+    assert rows[0]["volume"] == 156445200

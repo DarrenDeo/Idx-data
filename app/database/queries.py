@@ -16,9 +16,16 @@ from app.database.models import (
     DataError,
     ETLRun,
     ForeignFlowDaily,
+    FundamentalQuarterly,
+    IndexSummaryDaily,
+    IntradayTrade,
     MarketBrokerSummaryDaily,
+    MarketEvent,
+    MarketNews,
     OHLCVDaily,
+    OrderBookSnapshot,
     Stock,
+    StockSummaryDaily,
 )
 
 
@@ -79,6 +86,26 @@ def upsert_ohlcv(session: Session, rows: Iterable[dict[str, Any]]) -> int:
     return len(values)
 
 
+def upsert_stock_summary(session: Session, rows: Iterable[dict[str, Any]]) -> int:
+    values = list(rows)
+    if not values:
+        return 0
+    statement = _insert_for(session, StockSummaryDaily).values(values)
+    update_columns = (
+        "company_name", "previous", "open_price", "first_trade", "high", "low", "close",
+        "change", "volume", "value", "frequency", "foreign_buy_volume", "foreign_sell_volume",
+        "non_regular_volume", "non_regular_value", "non_regular_frequency", "listed_shares",
+        "tradeable_shares", "weight_for_index", "index_individual", "source", "raw_payload",
+    )
+    statement = statement.on_conflict_do_update(
+        index_elements=[StockSummaryDaily.symbol, StockSummaryDaily.trade_date],
+        set_={column: getattr(statement.excluded, column) for column in update_columns}
+        | {"ingested_at": func.now()},
+    )
+    session.execute(statement)
+    return len(values)
+
+
 def upsert_benchmarks(session: Session, rows: Iterable[dict[str, Any]]) -> int:
     values = list(rows)
     if not values:
@@ -95,6 +122,24 @@ def upsert_benchmarks(session: Session, rows: Iterable[dict[str, Any]]) -> int:
             "source": statement.excluded.source,
             "ingested_at": func.now(),
         },
+    )
+    session.execute(statement)
+    return len(values)
+
+
+def upsert_index_summary(session: Session, rows: Iterable[dict[str, Any]]) -> int:
+    values = list(rows)
+    if not values:
+        return 0
+    statement = _insert_for(session, IndexSummaryDaily).values(values)
+    update_columns = (
+        "previous", "highest", "lowest", "close", "change", "number_of_stock", "volume",
+        "value", "frequency", "source", "raw_payload",
+    )
+    statement = statement.on_conflict_do_update(
+        index_elements=[IndexSummaryDaily.benchmark, IndexSummaryDaily.trade_date],
+        set_={column: getattr(statement.excluded, column) for column in update_columns}
+        | {"ingested_at": func.now()},
     )
     session.execute(statement)
     return len(values)
@@ -201,6 +246,99 @@ def upsert_corporate_actions(session: Session, rows: Iterable[dict[str, Any]]) -
         )
     session.execute(statement)
     return len(values)
+
+
+def _upsert_rows(
+    session: Session,
+    model: type[Any],
+    rows: Iterable[dict[str, Any]],
+    index_elements: list[Any],
+    update_columns: tuple[str, ...],
+) -> int:
+    values = list(rows)
+    if not values:
+        return 0
+    statement = _insert_for(session, model).values(values)
+    statement = statement.on_conflict_do_update(
+        index_elements=index_elements,
+        set_={column: getattr(statement.excluded, column) for column in update_columns},
+    )
+    session.execute(statement)
+    return len(values)
+
+
+def upsert_order_book(session: Session, rows: Iterable[dict[str, Any]]) -> int:
+    return _upsert_rows(
+        session, OrderBookSnapshot, rows,
+        [OrderBookSnapshot.symbol, OrderBookSnapshot.captured_at, OrderBookSnapshot.level],
+        ("bid_price", "bid_volume", "offer_price", "offer_volume", "indicative_price", "source", "raw_payload"),
+    )
+
+
+def upsert_intraday_trades(session: Session, rows: Iterable[dict[str, Any]]) -> int:
+    return _upsert_rows(
+        session, IntradayTrade, rows,
+        [IntradayTrade.symbol, IntradayTrade.traded_at, IntradayTrade.sequence],
+        ("price", "volume", "buyer_broker", "seller_broker", "source", "raw_payload"),
+    )
+
+
+def upsert_fundamentals(session: Session, rows: Iterable[dict[str, Any]]) -> int:
+    return _upsert_rows(
+        session, FundamentalQuarterly, rows,
+        [FundamentalQuarterly.symbol, FundamentalQuarterly.fiscal_year, FundamentalQuarterly.fiscal_quarter],
+        (
+            "report_date", "revenue", "ebitda", "net_income", "operating_cash_flow", "capex",
+            "cash", "debt", "shares_outstanding", "segment_revenue", "major_ownership", "source", "raw_payload",
+        ),
+    )
+
+
+def upsert_market_events(session: Session, rows: Iterable[dict[str, Any]]) -> int:
+    values = list(rows)
+    if not values:
+        return 0
+    loaded = 0
+    for row in values:
+        existing = session.scalar(
+            select(MarketEvent).where(
+                MarketEvent.symbol == row.get("symbol"),
+                MarketEvent.event_date == row["event_date"],
+                MarketEvent.event_type == row["event_type"],
+                MarketEvent.source_id == row.get("source_id", ""),
+            )
+        )
+        if existing:
+            for key, value in row.items():
+                if key != "id":
+                    setattr(existing, key, value)
+        else:
+            session.add(MarketEvent(**row))
+        loaded += 1
+    return loaded
+
+
+def upsert_market_news(session: Session, rows: Iterable[dict[str, Any]]) -> int:
+    values = list(rows)
+    if not values:
+        return 0
+    loaded = 0
+    for row in values:
+        existing = session.scalar(
+            select(MarketNews).where(
+                MarketNews.symbol == row.get("symbol"),
+                MarketNews.published_at == row["published_at"],
+                MarketNews.title == row["title"],
+            )
+        )
+        if existing:
+            for key, value in row.items():
+                if key != "id":
+                    setattr(existing, key, value)
+        else:
+            session.add(MarketNews(**row))
+        loaded += 1
+    return loaded
 
 
 def record_data_errors(session: Session, rows: Iterable[dict[str, Any]]) -> int:

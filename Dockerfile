@@ -5,7 +5,7 @@ WORKDIR /opt/idx-platform
 
 COPY pyproject.toml ./
 COPY app ./app
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --timeout=180 --retries=10 .
 
 FROM base AS test
 COPY tests ./tests

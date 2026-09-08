@@ -17,6 +17,7 @@ from app.pipeline.corporate_actions import sync_corporate_actions
 from app.pipeline.daily import daily_market_update
 from app.pipeline.incremental import incremental_update
 from app.pipeline.market_broker import backfill_market_broker_summary
+from app.pipeline.index_summary import backfill_index_summary, benchmark_backfill_start
 from app.pipeline.symbols import sync_symbols
 
 
@@ -63,6 +64,13 @@ def build_parser() -> argparse.ArgumentParser:
     market_broker.add_argument("--start", type=_date, required=True)
     market_broker.add_argument("--end", type=_date, default=date.today())
 
+    index_summary = sub.add_parser(
+        "index-summary",
+        help="Fetch IDX IHSG and index summaries for a date range",
+    )
+    index_summary.add_argument("--start", type=_date, required=True)
+    index_summary.add_argument("--end", type=_date, default=date.today())
+
     actions = sub.add_parser("corporate-actions")
     actions.add_argument("--symbols", nargs="+")
     actions.add_argument("--start", type=_date, required=True)
@@ -79,8 +87,10 @@ def main() -> None:
         level=getattr(logging, settings.log_level, logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    # Additive schema creation keeps long-lived Docker volumes compatible with
+    # new feature tables; it never drops or rewrites existing data.
+    Base.metadata.create_all(engine)
     if args.command == "init-db":
-        Base.metadata.create_all(engine)
         return
 
     provider = IDXProvider()
@@ -136,6 +146,22 @@ def main() -> None:
                             args.start,
                             args.end,
                             concurrency=1,
+                        ),
+                    )
+                )
+            )
+        elif args.command == "index-summary":
+            benchmark_start = benchmark_backfill_start(args.start)
+            print(
+                _run_async(
+                    _run_with_provider(
+                        provider,
+                        backfill_index_summary(
+                            session,
+                            provider,
+                            benchmark_start,
+                            args.end,
+                            concurrency=min(2, settings.idx_concurrency),
                         ),
                     )
                 )

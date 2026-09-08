@@ -11,6 +11,88 @@ from zipfile import ZIP_DEFLATED, ZipFile
 EXCEL_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
+def _column_name(index: int) -> str:
+    """Return an Excel column name for a zero-based index."""
+
+    result = ""
+    number = index + 1
+    while number:
+        number, remainder = divmod(number - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
+
+
+def build_table_workbook(
+    title: str,
+    columns: list[tuple[str, str, str]],
+    records: Iterable[dict[str, Any]],
+    *,
+    sheet_name: str = "Data",
+    generated_at: datetime | None = None,
+) -> bytes:
+    """Build a small, formatted XLSX workbook for any tabular API dataset."""
+
+    generated_at = generated_at or datetime.now(timezone.utc)
+    values = list(records)
+    generated_label = f"Generated {generated_at.isoformat(timespec='seconds')}"
+    headers = "".join(_text_cell(f"{_column_name(i)}4", label, 2) for i, (label, _, _) in enumerate(columns))
+    rows_xml = [
+        f'<row r="1" ht="26" customHeight="1">{_text_cell("A1", title, 1)}</row>',
+        f'<row r="2">{_text_cell("A2", generated_label, 8)}</row>',
+        f"<row r=\"4\">{headers}</row>",
+    ]
+    for row_number, record in enumerate(values, start=5):
+        cells = []
+        for index, (_, key, kind) in enumerate(columns):
+            reference = f"{_column_name(index)}{row_number}"
+            value = record.get(key)
+            if value is None or value == "":
+                cells.append(_text_cell(reference, "", 9))
+            elif kind == "text":
+                cells.append(_text_cell(reference, value, 9))
+            elif kind == "date":
+                parsed = value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
+                cells.append(_number_cell(reference, _excel_date(parsed), 3))
+            elif kind == "percent":
+                cells.append(_number_cell(reference, value, 7))
+            elif kind == "currency":
+                cells.append(_number_cell(reference, value, 4))
+            else:
+                cells.append(_number_cell(reference, value, 5))
+        rows_xml.append(f'<row r="{row_number}">' + "".join(cells) + "</row>")
+    last_col = _column_name(max(0, len(columns) - 1))
+    last_row = max(5, 4 + len(values))
+    sheet_xml = _worksheet_xml(
+        rows_xml,
+        dimensions=f"A1:{last_col}{last_row}",
+        columns=[max(14, min(32, len(label) + 4)) for label, _, _ in columns],
+        freeze_row=4,
+        auto_filter=f"A4:{last_col}{last_row}" if values else None,
+        merged_cells=[f"A1:{last_col}1", f"A2:{last_col}2"],
+    )
+    content_types = """<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>"""
+    workbook_xml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="{escape(sheet_name)}" sheetId="1" r:id="rId1"/></sheets><calcPr calcId="191029" fullCalcOnLoad="1" forceFullCalc="1"/></workbook>'''
+    workbook_rels = '''<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'''
+    package_rels = '''<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'''
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", package_rels)
+        archive.writestr("xl/workbook.xml", workbook_xml)
+        archive.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+        archive.writestr("xl/styles.xml", _styles_xml())
+        archive.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+    return output.getvalue()
+
+
 def _text_cell(reference: str, value: Any, style: int = 0) -> str:
     text = escape(str(value))
     preserve = ' xml:space="preserve"' if text != text.strip() else ""
@@ -342,11 +424,27 @@ def build_analysis_workbook(records: Iterable[dict[str, Any]], *, generated_at: 
         ("MA10", "ma10", "currency"),
         ("MA20", "ma20", "currency"),
         ("MA50", "ma50", "currency"),
+        ("EMA5", "ema5", "currency"),
+        ("EMA10", "ema10", "currency"),
+        ("EMA20", "ema20", "currency"),
+        ("EMA50", "ema50", "currency"),
+        ("RSI14", "rsi14", "number"),
+        ("ATR14", "atr14", "currency"),
         ("Return 5D", "return5", "percent"),
         ("Return 10D", "return10", "percent"),
         ("Return 20D", "return20", "percent"),
         ("Volume Ratio 20D", "volume_ratio20", "number"),
         ("Volatility 20D", "volatility20", "percent"),
+        ("Mean Reversion Z20", "mean_reversion_z20", "number"),
+        ("Mean Reversion Signal", "mean_reversion_signal", "number"),
+        ("Mean Reversion Score", "mean_reversion_score", "number"),
+        ("Ensemble Score", "ensemble_score", "number"),
+        ("Market Regime", "market_regime", "text"),
+        ("Benchmark Observations", "benchmark_observation_count", "number"),
+        ("Benchmark Required", "benchmark_required_observations", "number"),
+        ("Benchmark Status", "benchmark_status", "text"),
+        ("Breakout 20D", "breakout_20", "text"),
+        ("Relative Strength Rank", "relative_strength_rank", "percent"),
         ("Trend Score", "trend_score", "number"),
         ("Simons Score", "simons_score", "number"),
         ("Simons Label", "simons_label", "text"),
@@ -354,13 +452,33 @@ def build_analysis_workbook(records: Iterable[dict[str, Any]], *, generated_at: 
         ("P Market", "p_market", "percent"),
         ("P Final", "p_final", "percent"),
         ("Edge", "edge", "percent"),
+        ("Benchmark Return 20D", "benchmark_return20", "percent"),
+        ("Excess Return 20D", "excess_return20", "percent"),
+        ("Beta 20D", "beta20", "number"),
+        ("Correlation 20D", "correlation20", "number"),
+        ("Benchmark Volatility 20D", "benchmark_volatility20", "percent"),
+        ("VWAP", "vwap", "currency"),
+        ("Market Cap", "market_cap", "currency"),
+        ("Free Float Shares", "free_float_shares", "number"),
+        ("Free Float %", "free_float_percentage", "percent"),
+        ("Free Float Market Cap", "free_float_market_cap", "currency"),
+        ("Turnover Ratio", "turnover_ratio", "percent"),
+        ("Broker Concentration", "broker_concentration", "number"),
         ("Foreign Net Value", "foreign_net_value", "currency"),
         ("Broker Net Value", "broker_net_value", "currency"),
+        ("Flow Confirmation", "flow_confirmation", "number"),
+        ("Event Count", "event_count", "number"),
+        ("Event Risk", "event_risk", "text"),
+        ("Sentiment Score", "sentiment_score", "number"),
+        ("Stop Price", "stop_price", "currency"),
+        ("Take Profit Price", "take_profit_price", "currency"),
+        ("Entry Signal", "entry_signal", "text"),
+        ("Price Source", "price_source", "text"),
         ("Probability Status", "probability_status", "text"),
         ("Data Status", "data_status", "text"),
         ("Model Version", "model_version", "text"),
     ]
-    letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    letters = [_column_name(index) for index in range(len(columns))]
     header_cells = "".join(
         _text_cell(f"{letters[index]}4", label, 2)
         for index, (label, _key, _kind) in enumerate(columns)
@@ -398,14 +516,15 @@ def build_analysis_workbook(records: Iterable[dict[str, Any]], *, generated_at: 
                 cells.append(_number_cell(reference, value, 5))
         data_rows.append(f'<row r="{row_number}">' + "".join(cells) + "</row>")
     last_row = max(5, 4 + len(values))
-    width_map = [14, 15, 16, 16, 16, 16, 16, 14, 14, 14, 17, 16, 14, 14, 19, 13, 13, 13, 13, 20, 20, 35, 20, 20]
+    width_map = [max(14, min(30, len(label) + 4)) for label, _, _ in columns]
+    last_column = _column_name(len(columns) - 1)
     data_xml = _worksheet_xml(
         data_rows,
-        dimensions=f"A1:X{last_row}",
+        dimensions=f"A1:{last_column}{last_row}",
         columns=width_map,
         freeze_row=4,
-        auto_filter=f"A4:X{last_row}" if values else None,
-        merged_cells=["A1:X1", "A2:X2"],
+        auto_filter=f"A4:{last_column}{last_row}" if values else None,
+        merged_cells=[f"A1:{last_column}1", f"A2:{last_column}2"],
     )
     summary_rows = [
         '<row r="1" ht="26" customHeight="1">' + _text_cell("A1", "IDX Quantitative Analysis Summary", 1) + "</row>",

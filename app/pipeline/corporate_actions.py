@@ -5,7 +5,7 @@ from datetime import date
 
 from sqlalchemy.orm import Session
 
-from app.database.queries import upsert_corporate_actions
+from app.database.queries import upsert_corporate_actions, upsert_market_events
 from app.downloader.provider import MarketDataProvider
 
 
@@ -47,6 +47,21 @@ async def sync_corporate_actions(
                 for action in actions
             ],
         )
+        upsert_market_events(
+            session,
+            [
+                {
+                    "symbol": action.symbol,
+                    "event_date": action.ex_date,
+                    "event_type": action.action_type,
+                    "title": action.action_type,
+                    "status": "scheduled",
+                    "source_id": action.source_id,
+                    "source": action.raw.get("source", "idx_public") if action.raw else "idx_public",
+                    "raw_payload": action.raw,
+                }
+                for action in actions
+            ],
+        )
         session.commit()
     return {"rows_loaded": loaded, "symbols_failed": failures}
-

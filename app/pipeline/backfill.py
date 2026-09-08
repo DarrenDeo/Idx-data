@@ -13,11 +13,14 @@ from app.database.queries import (
     finish_etl_run,
     record_data_errors,
     start_etl_run,
+    upsert_foreign_flow,
     upsert_ohlcv,
+    upsert_stock_summary,
 )
 from app.downloader.provider import MarketDataProvider, OHLCVRecord
 from app.monitoring import record_etl_result
 from app.validation.ohlcv import is_no_trade, validate_batch
+from app.pipeline.stock_summary import foreign_flow_row, stock_summary_row
 
 log = logging.getLogger(__name__)
 
@@ -167,8 +170,15 @@ async def _backfill_by_trading_date(
             date_skipped = len(selected) - len(trade_rows)
             valid, errors = validate_batch(trade_rows)
             try:
-                ensure_stock_symbols(session, (record.symbol for record in valid))
+                # Preserve the complete IDX Stock Summary payload and foreign
+                # volume even when a candle is quarantined (for example an
+                # illiquid row with OpenPrice=0).  Only validated rows enter
+                # the strict OHLCV fact table.
+                ensure_stock_symbols(session, (record.symbol for record in trade_rows))
                 date_loaded = upsert_ohlcv(session, [_row(record) for record in valid])
+                upsert_stock_summary(session, [stock_summary_row(record) for record in trade_rows])
+                foreign_rows = [row for record in trade_rows if (row := foreign_flow_row(record))]
+                upsert_foreign_flow(session, foreign_rows)
                 date_rejected = record_data_errors(session, errors)
                 session.commit()
                 loaded += date_loaded
@@ -248,7 +258,11 @@ async def _backfill_by_symbol(
         symbol_skipped = len(records) - len(trade_rows)
         valid, errors = validate_batch(trade_rows)
         try:
+            ensure_stock_symbols(session, (record.symbol for record in trade_rows))
             symbol_loaded = upsert_ohlcv(session, [_row(record) for record in valid])
+            upsert_stock_summary(session, [stock_summary_row(record) for record in trade_rows])
+            foreign_rows = [row for record in trade_rows if (row := foreign_flow_row(record))]
+            upsert_foreign_flow(session, foreign_rows)
             symbol_rejected = record_data_errors(session, errors)
             session.commit()
             loaded += symbol_loaded

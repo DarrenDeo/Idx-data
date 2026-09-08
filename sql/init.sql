@@ -24,6 +24,38 @@ CREATE TABLE IF NOT EXISTS ohlcv_daily (
 CREATE INDEX IF NOT EXISTS idx_symbol_date
 ON ohlcv_daily (symbol, trade_date DESC);
 
+CREATE TABLE IF NOT EXISTS stock_summary_daily (
+    symbol VARCHAR(16) NOT NULL REFERENCES stocks(symbol) ON DELETE CASCADE,
+    trade_date DATE NOT NULL,
+    company_name TEXT,
+    previous NUMERIC(18,4),
+    open_price NUMERIC(18,4),
+    first_trade NUMERIC(18,4),
+    high NUMERIC(18,4),
+    low NUMERIC(18,4),
+    close NUMERIC(18,4),
+    change NUMERIC(18,4),
+    volume BIGINT,
+    value NUMERIC(24,4),
+    frequency BIGINT,
+    foreign_buy_volume BIGINT,
+    foreign_sell_volume BIGINT,
+    non_regular_volume BIGINT,
+    non_regular_value NUMERIC(24,4),
+    non_regular_frequency BIGINT,
+    listed_shares BIGINT,
+    tradeable_shares BIGINT,
+    weight_for_index NUMERIC(24,8),
+    index_individual NUMERIC(18,8),
+    source VARCHAR(50) NOT NULL DEFAULT 'idx_public',
+    raw_payload JSONB,
+    ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (symbol, trade_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_summary_symbol_date
+ON stock_summary_daily (symbol, trade_date DESC);
+
 CREATE TABLE IF NOT EXISTS benchmark_daily (
     benchmark VARCHAR(32) NOT NULL,
     trade_date DATE NOT NULL,
@@ -39,6 +71,27 @@ CREATE TABLE IF NOT EXISTS benchmark_daily (
 
 CREATE INDEX IF NOT EXISTS idx_benchmark_date
 ON benchmark_daily (benchmark, trade_date DESC);
+
+CREATE TABLE IF NOT EXISTS index_summary_daily (
+    benchmark VARCHAR(32) NOT NULL,
+    trade_date DATE NOT NULL,
+    previous NUMERIC(18,4),
+    highest NUMERIC(18,4),
+    lowest NUMERIC(18,4),
+    close NUMERIC(18,4) NOT NULL,
+    change NUMERIC(18,4),
+    number_of_stock INTEGER,
+    volume BIGINT,
+    value NUMERIC(24,4),
+    frequency BIGINT,
+    source VARCHAR(50) NOT NULL DEFAULT 'idx_public',
+    raw_payload JSONB,
+    ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (benchmark, trade_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_index_summary_date
+ON index_summary_daily (benchmark, trade_date DESC);
 
 CREATE TABLE IF NOT EXISTS foreign_flow_daily (
     symbol VARCHAR(16) NOT NULL,
@@ -139,6 +192,89 @@ CREATE TABLE IF NOT EXISTS adjusted_prices (
     adjusted_volume BIGINT NOT NULL,
     calculated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (symbol, trade_date)
+);
+
+CREATE TABLE IF NOT EXISTS order_book_snapshots (
+    symbol VARCHAR(16) NOT NULL,
+    captured_at TIMESTAMPTZ NOT NULL,
+    level INTEGER NOT NULL,
+    bid_price NUMERIC(18,4),
+    bid_volume BIGINT,
+    offer_price NUMERIC(18,4),
+    offer_volume BIGINT,
+    indicative_price NUMERIC(18,4),
+    source VARCHAR(50) NOT NULL DEFAULT 'import',
+    raw_payload JSONB,
+    PRIMARY KEY (symbol, captured_at, level)
+);
+
+CREATE INDEX IF NOT EXISTS idx_order_book_symbol_time
+ON order_book_snapshots (symbol, captured_at DESC);
+
+CREATE TABLE IF NOT EXISTS intraday_trades (
+    symbol VARCHAR(16) NOT NULL,
+    traded_at TIMESTAMPTZ NOT NULL,
+    sequence INTEGER NOT NULL DEFAULT 0,
+    price NUMERIC(18,4) NOT NULL,
+    volume BIGINT NOT NULL,
+    buyer_broker VARCHAR(16),
+    seller_broker VARCHAR(16),
+    source VARCHAR(50) NOT NULL DEFAULT 'import',
+    raw_payload JSONB,
+    PRIMARY KEY (symbol, traded_at, sequence)
+);
+
+CREATE INDEX IF NOT EXISTS idx_intraday_symbol_time
+ON intraday_trades (symbol, traded_at DESC);
+
+CREATE TABLE IF NOT EXISTS fundamentals_quarterly (
+    symbol VARCHAR(16) NOT NULL,
+    fiscal_year INTEGER NOT NULL,
+    fiscal_quarter INTEGER NOT NULL,
+    report_date DATE,
+    revenue NUMERIC(28,4),
+    ebitda NUMERIC(28,4),
+    net_income NUMERIC(28,4),
+    operating_cash_flow NUMERIC(28,4),
+    capex NUMERIC(28,4),
+    cash NUMERIC(28,4),
+    debt NUMERIC(28,4),
+    shares_outstanding BIGINT,
+    segment_revenue JSONB,
+    major_ownership JSONB,
+    source VARCHAR(50) NOT NULL DEFAULT 'import',
+    raw_payload JSONB,
+    ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (symbol, fiscal_year, fiscal_quarter)
+);
+
+CREATE TABLE IF NOT EXISTS market_events (
+    id BIGSERIAL PRIMARY KEY,
+    symbol VARCHAR(16),
+    event_date DATE NOT NULL,
+    event_type VARCHAR(50) NOT NULL,
+    title TEXT,
+    status VARCHAR(30),
+    source_id VARCHAR(100) NOT NULL DEFAULT '',
+    source VARCHAR(50) NOT NULL DEFAULT 'import',
+    raw_payload JSONB,
+    ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_events_symbol_date
+ON market_events (symbol, event_date DESC);
+
+CREATE TABLE IF NOT EXISTS market_news (
+    id BIGSERIAL PRIMARY KEY,
+    symbol VARCHAR(16),
+    published_at TIMESTAMPTZ NOT NULL,
+    title TEXT NOT NULL,
+    publisher TEXT,
+    url TEXT,
+    sentiment_score NUMERIC(8,5),
+    sentiment_label VARCHAR(20),
+    source VARCHAR(50) NOT NULL DEFAULT 'import',
+    raw_payload JSONB
 );
 
 -- Yearly range partitioning is deliberately deferred until the fact table grows

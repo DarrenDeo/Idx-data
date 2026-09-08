@@ -53,6 +53,23 @@ class MarketBrokerSummaryRecord:
 
 
 @dataclass(slots=True)
+class IndexSummaryRecord:
+    benchmark: str
+    trade_date: date
+    previous: Decimal | int | float | str | None
+    highest: Decimal | int | float | str | None
+    lowest: Decimal | int | float | str | None
+    close: Decimal | int | float | str
+    change: Decimal | int | float | str | None
+    number_of_stock: int | str | None
+    volume: int | str | None
+    value: Decimal | int | float | str | None
+    frequency: int | str | None
+    source: str = "idx_public"
+    raw: dict[str, Any] | None = None
+
+
+@dataclass(slots=True)
 class CorporateActionRecord:
     symbol: str
     ex_date: date
@@ -78,6 +95,10 @@ class MarketDataProvider(abc.ABC):
         self, trade_date: date
     ) -> list[MarketBrokerSummaryRecord]:
         """Return the public, market-wide broker summary for one session."""
+        raise NotImplementedError
+
+    async def get_index_summary(self, trade_date: date) -> list[IndexSummaryRecord]:
+        """Return IDX index summary rows for one session when supported."""
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -192,6 +213,45 @@ class IDXProvider(MarketDataProvider):
         )
         rows = payload.get("data", []) if isinstance(payload, dict) else []
         return [self.parse_ohlcv_item(item) for item in rows]
+
+    @staticmethod
+    def parse_index_summary_item(item: dict[str, Any], trade_date: date) -> IndexSummaryRecord:
+        benchmark = (
+            item.get("IndexCode") or item.get("IndexName") or item.get("KodeIndeks")
+            or item.get("code") or item.get("index")
+        )
+        if not benchmark:
+            raise ValueError("index summary row lacks index code")
+        row_date = item.get("Date") or item.get("Tanggal") or item.get("date")
+        parsed_date = _parse_date(row_date) if row_date else trade_date
+        return IndexSummaryRecord(
+            benchmark=str(benchmark).strip().upper(),
+            trade_date=parsed_date,
+            previous=item.get("Previous", item.get("previous")),
+            highest=item.get("Highest", item.get("High", item.get("highest"))),
+            lowest=item.get("Lowest", item.get("Low", item.get("lowest"))),
+            close=item.get("Close", item.get("close")),
+            change=item.get("Change", item.get("change")),
+            number_of_stock=item.get("NumberOfStock", item.get("NumberOfStocks")),
+            volume=item.get("Volume", item.get("volume")),
+            value=item.get("Value", item.get("value")),
+            frequency=item.get("Frequency", item.get("frequency")),
+            raw=item,
+        )
+
+    async def get_index_summary(self, trade_date: date) -> list[IndexSummaryRecord]:
+        payload = await self.client.get_json(
+            "/TradingSummary/GetIndexSummary",
+            params={"date": trade_date.strftime("%Y%m%d"), "start": 0, "length": 9999},
+        )
+        rows = payload.get("data", []) if isinstance(payload, dict) else []
+        records: list[IndexSummaryRecord] = []
+        for item in rows:
+            try:
+                records.append(self.parse_index_summary_item(item, trade_date))
+            except ValueError:
+                continue
+        return records
 
     @staticmethod
     def parse_market_broker_item(
